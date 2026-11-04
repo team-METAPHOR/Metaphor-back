@@ -33,14 +33,18 @@ def _child_entry(target: Callable[[str], None], job_id: str) -> None:
 
 
 def _kill_group(process: BaseProcess) -> None:
+    """SIGTERM then SIGKILL the child's process group; no-op once the group is empty."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            return
+        except (ProcessLookupError, PermissionError):
+            pass  # group not created yet (child before setsid) or already gone
+        if process.is_alive():
+            # Fallback for a child that has not called setsid yet.
+            process.terminate() if sig == signal.SIGTERM else process.kill()
         process.join(KILL_GRACE_SECONDS)
         if not process.is_alive():
-            return
+            break
 
 
 def supervise(
@@ -60,14 +64,23 @@ def supervise(
     process = context.Process(target=_child_entry, args=(target, job_id), daemon=False)
     process.start()
     started = time.monotonic()
-    timed_out = False
-    while process.is_alive():
-        process.join(heartbeat_seconds)
-        queue.renew_lease(conn, job_id, worker_id, lease_seconds=lease_seconds)
-        if process.is_alive() and time.monotonic() - started > deadline_seconds:
-            timed_out = True
-            _kill_group(process)
-    code = "WORKER_TIMEOUT" if timed_out else "WORKER_CRASHED"
+    code = "WORKER_CRASHED"
+    try:
+        while process.is_alive():
+            process.join(heartbeat_seconds)
+            if not process.is_alive():
+                break
+            if not queue.renew_lease(conn, job_id, worker_id, lease_seconds=lease_seconds):
+                # Reaped or finalized elsewhere: this worker no longer owns the job.
+                code = "LEASE_LOST"
+                break
+            if time.monotonic() - started > deadline_seconds:
+                code = "WORKER_TIMEOUT"
+                break
+    finally:
+        # Always tear down the whole group (Chromium grandchildren survive a clean child exit
+        # too), including when lease renewal raised.
+        _kill_group(process)
     if queue.abandon(conn, job_id, code, cancel_code="CANCEL_FORCED"):
         logger.warning("job %s closed by supervisor: %s (exit %s)", job_id, code, process.exitcode)
     return process

@@ -152,3 +152,58 @@ async def test_supervise_cancelling_job_becomes_cancelled(db_session, conn):
         context=multiprocessing.get_context("spawn"),
     )
     assert status_of(conn, job_id)[:2] == ("cancelled", "CANCEL_FORCED")
+
+
+def _sleep_short(job_id: str) -> None:
+    time.sleep(30)
+
+
+async def test_supervise_kills_child_when_lease_lost(db_session, conn):
+    await seed_jobs(db_session, 1)
+    job_id = queue.claim_next(conn, "w1", lease_seconds=30)
+    # Another actor takes ownership (e.g. reaper + new claim): renewals start failing.
+    conn.execute("UPDATE validation_jobs SET lease_owner = 'other' WHERE id = %s", (job_id,))
+    started = time.monotonic()
+    process = supervise(
+        conn,
+        job_id,
+        "w1",
+        target=_sleep_short,
+        deadline_seconds=60,
+        lease_seconds=30,
+        heartbeat_seconds=0.2,
+        context=multiprocessing.get_context("spawn"),
+    )
+    assert time.monotonic() - started < 10
+    assert not process.is_alive()
+
+
+async def test_supervise_kills_child_when_renewal_raises(db_session, conn, monkeypatch):
+    await seed_jobs(db_session, 1)
+    job_id = queue.claim_next(conn, "w1", lease_seconds=30)
+
+    def broken(*args, **kwargs):
+        raise psycopg.OperationalError("db down")
+
+    monkeypatch.setattr(queue, "renew_lease", broken)
+    holder = {}
+
+    def capture(*args, **kwargs):
+        holder["process"] = original(*args, **kwargs)
+        return holder["process"]
+
+    original = multiprocessing.get_context("spawn").Process
+    context = multiprocessing.get_context("spawn")
+    monkeypatch.setattr(context, "Process", capture)
+    with pytest.raises(psycopg.OperationalError):
+        supervise(
+            conn,
+            job_id,
+            "w1",
+            target=_sleep_short,
+            deadline_seconds=60,
+            lease_seconds=30,
+            heartbeat_seconds=0.2,
+            context=context,
+        )
+    assert not holder["process"].is_alive()

@@ -27,7 +27,8 @@ worker = [
 ]
 
 [tool.uv.sources]
-metaphor-core-engine = { git = "https://github.com/team-METAPHOR/Core_engine", rev = "2ccf627" }
+# Built from team-METAPHOR/Core_engine@2ccf627 (see vendor/README.md).
+metaphor-core-engine = { path = "vendor/metaphor_core_engine-0.2.0-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

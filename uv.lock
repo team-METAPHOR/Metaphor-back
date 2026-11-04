@@ -454,7 +454,7 @@ worker = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "metaphor-core-engine", git = "https://github.com/team-METAPHOR/Core_engine?rev=2ccf627" },
+    { name = "metaphor-core-engine", path = "vendor/metaphor_core_engine-0.2.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
@@ -469,20 +469,30 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24,<2" },
     { name = "ruff", specifier = ">=0.9,<1" },
 ]
-worker = [{ name = "metaphor-core-engine", extras = ["browser"], git = "https://github.com/team-METAPHOR/Core_engine?rev=2ccf627" }]
+worker = [{ name = "metaphor-core-engine", extras = ["browser"], path = "vendor/metaphor_core_engine-0.2.0-py3-none-any.whl" }]
 
 [[package]]
 name = "metaphor-core-engine"
 version = "0.2.0"
-source = { git = "https://github.com/team-METAPHOR/Core_engine?rev=2ccf627#2ccf627d1014f3bcf8e5dc3985d3ba170f13cb39" }
+source = { path = "vendor/metaphor_core_engine-0.2.0-py3-none-any.whl" }
 dependencies = [
     { name = "pillow" },
+]
+wheels = [
+    { filename = "metaphor_core_engine-0.2.0-py3-none-any.whl", hash = "sha256:6c4e8dbdc99ee33fb8f74c6bf34b7e118f7d5fb05e9c1a7025eba6ffed1d12e8" },
 ]
 
 [package.optional-dependencies]
 browser = [
     { name = "playwright" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "pillow", specifier = "==13.0.0" },
+    { name = "playwright", marker = "extra == 'browser'", specifier = "==1.64.1" },
+]
+provides-extras = ["browser"]
 
 [[package]]
 name = "opentelemetry-api"

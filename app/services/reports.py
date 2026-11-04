@@ -205,13 +205,14 @@ async def load_visible_report(db: AsyncSession, user_id: str, report_id: str):
     return report, access
 
 
-def _brief(job: ValidationJob | None) -> JobBrief | None:
+def _brief(job: ValidationJob | None, access: str = "org") -> JobBrief | None:
     if job is None:
         return None
-    return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=job.verdict)
+    verdict = job.verdict if access == "org" else None
+    return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=verdict)
 
 
-def _item(report: Report, job: ValidationJob | None) -> dict:
+def _item(report: Report, job: ValidationJob | None, access: str = "org") -> dict:
     return {
         "id": report.id,
         "program_id": report.program_id,
@@ -221,7 +222,7 @@ def _item(report: Report, job: ValidationJob | None) -> dict:
         "origin_kind": report.origin_kind,
         "duplicate_count": report.duplicate_count,
         "workflow_status": report.workflow_status,
-        "latest_job": _brief(job),
+        "latest_job": _brief(job, access),
         "created_at": report.created_at,
     }
 
@@ -240,12 +241,14 @@ async def list_reports(
         rows = await reports_repo.list_visible(
             db, user_id, limit=limit, cursor=position, source=source, program_id=program_id
         )
+        org_ids = set((await db.scalars(reports_repo.member_org_ids(user_id))).all())
     page = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
         last = page[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    return ReportList(items=[ReportItem(**_item(r, j)) for r, j in page], next_cursor=next_cursor)
+    items = [ReportItem(**_item(r, j, "org" if r.org_id in org_ids else "author")) for r, j in page]
+    return ReportList(items=items, next_cursor=next_cursor)
 
 
 async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDetail:
@@ -253,7 +256,7 @@ async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDe
         report, access = await load_visible_report(db, user_id, report_id)
         job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
     return ReportDetail(
-        **_item(report, job),
+        **_item(report, job, access),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,

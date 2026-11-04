@@ -243,3 +243,29 @@ async def test_reports_list_filters_by_source(client, db_session, world):
     assert len(platform["items"]) == 1
     assert platform["items"][0]["source"] == "platform"
     assert json.dumps(platform)  # serializable
+
+
+async def test_reporter_view_hides_org_only_fields(client, db_session, world):
+    report_id, job_id = await make_job(client, world)
+    job = await db_session.get(ValidationJob, job_id)
+    job.status, job.verdict, job.reason_code = "completed", "reproduced", "SYMPTOM_OBSERVED_TWICE"
+    job.classification, job.error_code = "functional", "MODEL_TIMEOUT"
+    db_session.add(
+        JobEvent(job_id=job_id, engine_sequence=1, kind="running", detail={"plan_sha256": "abc"})
+    )
+    await db_session.commit()
+    h = world["reporter_h"]
+    view = (await client.get(f"/api/v1/validation-jobs/{job_id}", headers=h)).json()
+    assert view["status"] == "completed"
+    for field in ("verdict", "reason_code", "classification", "error_code"):
+        assert view[field] is None, field
+    events = (await client.get(f"/api/v1/validation-jobs/{job_id}/events", headers=h)).json()
+    assert events["items"][0] == {**events["items"][0], "kind": "running", "detail": {}}
+    detail = (await client.get(f"/api/v1/reports/{report_id}", headers=h)).json()
+    assert detail["latest_job"]["verdict"] is None
+    listed = (await client.get("/api/v1/reports", headers=h)).json()
+    assert listed["items"][0]["latest_job"]["verdict"] is None
+    org_view = (
+        await client.get(f"/api/v1/validation-jobs/{job_id}", headers=world["admin_h"])
+    ).json()
+    assert org_view["verdict"] == "reproduced"

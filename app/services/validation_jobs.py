@@ -8,9 +8,24 @@ from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
 from app.services.reports import load_visible_report
 
+# Reporters see progress and follow-up questions only; verdicts, AI classification and error
+# codes are customer information (spec §4: reporter sees only what the customer publishes).
+_ORG_ONLY_FIELDS = (
+    "verdict",
+    "reason_code",
+    "classification",
+    "error_code",
+    "backend_error_code",
+    "regression",
+)
 
-def job_out(job: ValidationJob) -> JobOut:
-    return JobOut.model_validate(job, from_attributes=True)
+
+def job_out(job: ValidationJob, access: str = "org") -> JobOut:
+    out = JobOut.model_validate(job, from_attributes=True)
+    if access != "org":
+        out = out.model_copy(update={field: None for field in _ORG_ONLY_FIELDS})
+        out.analysis_available = False
+    return out
 
 
 async def load_visible_job(db: AsyncSession, user_id: str, job_id: str):
@@ -23,8 +38,8 @@ async def load_visible_job(db: AsyncSession, user_id: str, job_id: str):
 
 async def get_job(db: AsyncSession, user_id: str, job_id: str) -> JobOut:
     async with db.begin():
-        job, _, _ = await load_visible_job(db, user_id, job_id)
-        return job_out(job)
+        job, _, access = await load_visible_job(db, user_id, job_id)
+        return job_out(job, access)
 
 
 async def get_result(db: AsyncSession, user_id: str, job_id: str) -> JobResult:
@@ -43,6 +58,10 @@ async def list_events(
     db: AsyncSession, user_id: str, job_id: str, *, after: int, limit: int
 ) -> EventList:
     async with db.begin():
-        job, _, _ = await load_visible_job(db, user_id, job_id)
+        job, _, access = await load_visible_job(db, user_id, job_id)
         events = await jobs_repo.events_after(db, job.id, after, limit)
-        return EventList(items=[EventOut.model_validate(e, from_attributes=True) for e in events])
+        items = [EventOut.model_validate(e, from_attributes=True) for e in events]
+        if access != "org":
+            # Stage names only; details (plan hashes, revisions, error codes) stay with the org.
+            items = [item.model_copy(update={"detail": {}}) for item in items]
+        return EventList(items=items)

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.core.config import get_settings
 from app.core.ids import new_id
@@ -307,3 +307,41 @@ async def test_ip_hash_cleared_after_a_day_regardless_of_retention(db_session):
     o = await reload(db_session, Report, old_id)
     assert o.client_ip_hash is None and o.description != ""
     assert (await reload(db_session, Report, fresh_id)).client_ip_hash == "a" * 64
+
+
+async def test_create_job_rereads_scrub_under_row_lock(db_session):
+    """A caller holding a stale Report (loaded before the purge committed) is still refused."""
+    from app.core.errors import ApiError
+    from app.services.jobs import create_job
+
+    report_id, _ = await seed_history(db_session, age_days=40)
+    stale = await db_session.get(Report, report_id)
+    assert stale.scrubbed_at is None
+    await db_session.commit()
+    assert run_purge()["reports_scrubbed"] == 1
+    with pytest.raises(ApiError) as exc:
+        await create_job(db_session, stale, "fresh")
+    assert (exc.value.status, exc.value.code) == (410, "REPORT_EXPIRED")
+    await db_session.rollback()
+
+
+async def test_purge_skips_report_locked_by_job_creation(db_session):
+    report_id, _ = await seed_history(db_session, age_days=40)
+    # Without an IP hash the purge's IP UPDATE does not wait on the locked row.
+    await db_session.execute(
+        update(Report).where(Report.id == report_id).values(client_ip_hash=None)
+    )
+    await db_session.commit()
+    url = TEST_DATABASE_URL.replace("+psycopg", "")
+    with psycopg.connect(url) as other:  # an in-flight create_job: row locked, new job queued
+        other.execute("SELECT 1 FROM reports WHERE id = %s FOR UPDATE", (report_id,))
+        assert run_purge()["reports_scrubbed"] == 0
+        other.execute(
+            "INSERT INTO validation_jobs (id, report_id, org_id, kind, status, scope_revision,"
+            " scope_snapshot) SELECT %s, id, org_id, 'fresh', 'queued', 1, '{}' FROM reports"
+            " WHERE id = %s",
+            (new_id(), report_id),
+        )
+        other.commit()
+    assert run_purge()["reports_scrubbed"] == 0
+    assert (await reload(db_session, Report, report_id)).scrubbed_at is None

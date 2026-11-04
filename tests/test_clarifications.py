@@ -1,7 +1,9 @@
-import pytest
-from sqlalchemy import select
+from datetime import UTC, datetime
 
-from app.models import Clarification, ValidationJob
+import pytest
+from sqlalchemy import func, select, update
+
+from app.models import Clarification, Report, ValidationJob
 from tests.factories import login_as, make_org, make_program
 from tests.test_reports_api import submit
 
@@ -118,3 +120,17 @@ async def test_stranger_404(client, db_session, world):
     _, stranger_h = await login_as(client, db_session)
     response = await answer(client, world, stranger_h)
     assert response.status_code == 404
+
+
+async def test_answer_on_scrubbed_report_410(client, db_session, world):
+    await set_status(db_session, world["job_id"], "needs_info")
+    await db_session.execute(
+        update(Report)
+        .where(Report.id == world["report_id"])
+        .values(description="", scrubbed_at=datetime.now(UTC))
+    )
+    await db_session.commit()
+    response = await answer(client, world)
+    assert (response.status_code, response.json()["error"]["code"]) == (410, "REPORT_EXPIRED")
+    assert await db_session.scalar(select(func.count()).select_from(Clarification)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(ValidationJob)) == 1

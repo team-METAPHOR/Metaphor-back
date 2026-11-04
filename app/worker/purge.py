@@ -121,6 +121,18 @@ def _scrub_reports(conn: psycopg.Connection) -> int:
                 {"active": list(ACTIVE_JOB_STATUSES), "limit": SCRUB_BATCH},
             )
         ]
+        if ids:
+            # Re-check under the row lock: a create_job that committed while we waited for the
+            # snapshot is visible to this new statement (READ COMMITTED).
+            busy = {
+                report_id
+                for (report_id,) in conn.execute(
+                    "SELECT DISTINCT report_id FROM validation_jobs"
+                    " WHERE report_id = ANY(%(ids)s) AND status = ANY(%(active)s)",
+                    {"ids": ids, "active": list(ACTIVE_JOB_STATUSES)},
+                )
+            }
+            ids = [report_id for report_id in ids if report_id not in busy]
         if not ids:
             return 0
         params = {"ids": ids}

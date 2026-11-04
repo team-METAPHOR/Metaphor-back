@@ -162,3 +162,19 @@ async def test_oversized_request_413_envelope(client):
     assert error["code"] == "PAYLOAD_TOO_LARGE"
     assert error["request_id"] == response.headers["X-Request-Id"]
     assert MAX_REQUEST_BYTES == 6 * 1024 * 1024
+
+
+def test_xff_from_untrusted_peer_warns_once_without_value(monkeypatch, caplog):
+    from app.core import client_ip as module
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", [])
+    monkeypatch.setattr(module, "_warned_untrusted_xff", False)
+    with caplog.at_level("WARNING", logger="app.core.client_ip"):
+        for _ in range(3):
+            assert module.client_ip(_request("10.0.0.5", ["198.51.100.7"])) == "10.0.0.5"
+        module.client_ip(_request("10.0.0.6"))  # no header: no warning
+    records = [r for r in caplog.records if r.name == "app.core.client_ip"]
+    assert len(records) == 1
+    assert records[0].levelname == "WARNING"
+    assert "TRUSTED_PROXIES" in records[0].getMessage()
+    assert "198.51.100.7" not in caplog.text

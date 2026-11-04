@@ -1,12 +1,16 @@
 """Client address for rate limits, honoring X-Forwarded-For only from trusted proxies."""
 
 import ipaddress
+import logging
 
 from starlette.requests import Request
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+# Warn once per process: behind an unlisted proxy every client shares one rate-limit key.
+_warned_untrusted_xff = False
 
 
 def parse_ip(value: str) -> IPAddress | None:
@@ -32,6 +36,14 @@ def parse_ip(value: str) -> IPAddress | None:
     return ip
 
 
+def _warn_untrusted_xff() -> None:
+    global _warned_untrusted_xff
+    if not _warned_untrusted_xff:
+        _warned_untrusted_xff = True
+        # Never log the header value: it is client-controlled.
+        logger.warning("X-Forwarded-For received from untrusted peer; set TRUSTED_PROXIES")
+
+
 def client_ip(request: Request) -> str:
     """Peer address, or the right-most X-Forwarded-For hop that is not a trusted proxy.
 
@@ -49,6 +61,8 @@ def client_ip(request: Request) -> str:
         return any(ip in net for net in networks)
 
     if not trusted(peer):
+        if "x-forwarded-for" in request.headers:
+            _warn_untrusted_xff()
         return str(peer)
     hops = [h for v in request.headers.getlist("x-forwarded-for") for h in v.split(",")]
     for hop in reversed(hops):

@@ -45,7 +45,7 @@ class ProgramCreate(_Strict):
     test_context_id: str = "anonymous"
     mask_selectors: list[str] = Field(default=[], max_length=100)
     session_secret_ref: str | None = Field(default=None, pattern=SECRET_REF_PATTERN)
-    reset_adapter: str = Field(default="stateless", pattern=r"^[a-z0-9_]{1,64}$")
+    reset_adapter: str = Field(default="stateless", max_length=64)
 
 
 class ProgramPatch(_Strict):
@@ -63,7 +63,7 @@ class ProgramPatch(_Strict):
     test_context_id: str | None = None
     mask_selectors: list[str] | None = Field(default=None, max_length=100)
     session_secret_ref: str | None = Field(default=None, pattern=SECRET_REF_PATTERN)
-    reset_adapter: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,64}$")
+    reset_adapter: str | None = Field(default=None, max_length=64)
 
 
 class ScopeResponse(BaseModel):

@@ -261,3 +261,14 @@ async def test_secret_ref_never_in_any_response(client, world, db_session):
     for response in responses:
         assert response.status_code == 200
         assert SECRET_REF not in response.text
+
+
+async def test_unknown_reset_adapter_422(client, world):
+    response = await create(client, world, reset_adapter="truncate_all")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "RESET_ADAPTER_UNKNOWN"
+    program = await created(client, world)
+    patch = await client.patch(
+        f"/api/v1/programs/{program['id']}", json={"reset_adapter": "nope"}, headers=world["admin"]
+    )
+    assert patch.json()["error"]["code"] == "RESET_ADAPTER_UNKNOWN"

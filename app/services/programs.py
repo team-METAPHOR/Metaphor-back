@@ -13,6 +13,8 @@ from app.services.access import can_submit, org_role, require_org_role
 from app.services.audit import record_audit
 from app.services.intake import run_policy
 
+# keep in sync with app.worker.resets.RESETS
+ALLOWED_RESET_ADAPTERS = ("stateless",)
 _APP_VERSION = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 _PROGRAM_FIELDS = ("name", "status", "submission_mode", "external_ai_allowed")
 
@@ -37,6 +39,8 @@ def browser_options(revision: ProgramScopeRevision) -> BrowserOptions:
 
 def _validated(revision: ProgramScopeRevision) -> ProgramScopeRevision:
     """Validate with the engine's own types and store its normalized URL/prefixes."""
+    if revision.reset_adapter not in ALLOWED_RESET_ADAPTERS:
+        raise ApiError(422, "RESET_ADAPTER_UNKNOWN", "지원하지 않는 초기화 방식입니다.")
     try:
         policy = run_policy(revision)
     except PolicyError as error:

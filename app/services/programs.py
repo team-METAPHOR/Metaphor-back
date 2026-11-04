@@ -59,8 +59,11 @@ def _validated(revision: ProgramScopeRevision) -> ProgramScopeRevision:
     return revision
 
 
+_OPERATOR_FIELDS = ("session_secret_ref", "allow_private_targets", "private_cidrs")
+
+
 def _scope_values(revision: ProgramScopeRevision) -> dict:
-    return {field: getattr(revision, field) for field in SCOPE_FIELDS}
+    return {field: getattr(revision, field) for field in (*SCOPE_FIELDS, *_OPERATOR_FIELDS)}
 
 
 async def create_program(db: AsyncSession, user_id: str, body: ProgramCreate):
@@ -78,6 +81,7 @@ async def create_program(db: AsyncSession, user_id: str, body: ProgramCreate):
                 revision=1,
                 allow_private_targets=False,
                 private_cidrs=[],
+                session_secret_ref=None,
                 created_by=user_id,
                 **body.model_dump(include=set(SCOPE_FIELDS)),
             )
@@ -136,17 +140,22 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
 
         candidate = None
         if scope_input:
-            # Old revisions are never updated: build N+1, carrying operator-only settings over.
-            candidate = _validated(
-                ProgramScopeRevision(
-                    program_id=program.id,
-                    revision=program.current_revision + 1,
-                    allow_private_targets=revision.allow_private_targets,
-                    private_cidrs=list(revision.private_cidrs),
-                    created_by=user_id,
-                    **{**_scope_values(revision), **scope_input},
-                )
+            # Old revisions are never updated: build N+1. Operator-only settings carry over,
+            # except that a provisioned session is bound to its origin and is dropped when
+            # base_url moves (the operator must re-bind it).
+            values = {**_scope_values(revision), **scope_input}
+            if "base_url" in scope_input:
+                values["session_secret_ref"] = None
+            candidate = ProgramScopeRevision(
+                program_id=program.id,
+                revision=program.current_revision + 1,
+                created_by=user_id,
+                **values,
             )
+            candidate = _validated(candidate)
+            if candidate.base_url == revision.base_url:
+                candidate.session_secret_ref = revision.session_secret_ref
+                _validated(candidate)  # re-check run options with the session restored
             if _scope_values(candidate) == _scope_values(revision):
                 candidate = None
 

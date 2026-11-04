@@ -5,8 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Status = Literal["draft", "active", "paused", "closed"]
 SubmissionMode = Literal["open_authenticated", "invite_only"]
-# session_secret_ref names the worker env var QA_SESSION_<REF>; never the secret itself.
-SECRET_REF_PATTERN = r"^[A-Z0-9_]{1,64}$"
 
 # Engine validates content (RunPolicy / BrowserOptions); these only bound input size.
 SCOPE_FIELDS = (
@@ -19,13 +17,15 @@ SCOPE_FIELDS = (
     "approved_app_versions",
     "test_context_id",
     "mask_selectors",
-    "session_secret_ref",
     "reset_adapter",
 )
 
 
 class _Strict(BaseModel):
-    # Unknown fields (e.g. operator-only allow_private_targets) are rejected, not ignored.
+    # Unknown fields are rejected, not ignored. Operator-only revision fields
+    # (session_secret_ref, allow_private_targets, private_cidrs) are deliberately absent:
+    # a customer admin naming a worker secret could point another org's credentials at
+    # their own base_url.
     model_config = ConfigDict(extra="forbid")
 
 
@@ -44,7 +44,6 @@ class ProgramCreate(_Strict):
     approved_app_versions: list[str] = Field(default=[], max_length=50)  # checked per item
     test_context_id: str = "anonymous"
     mask_selectors: list[str] = Field(default=[], max_length=100)
-    session_secret_ref: str | None = Field(default=None, pattern=SECRET_REF_PATTERN)
     reset_adapter: str = Field(default="stateless", max_length=64)
 
 
@@ -62,7 +61,6 @@ class ProgramPatch(_Strict):
     approved_app_versions: list[str] | None = Field(default=None, max_length=50)
     test_context_id: str | None = None
     mask_selectors: list[str] | None = Field(default=None, max_length=100)
-    session_secret_ref: str | None = Field(default=None, pattern=SECRET_REF_PATTERN)
     reset_adapter: str | None = Field(default=None, max_length=64)
 
 

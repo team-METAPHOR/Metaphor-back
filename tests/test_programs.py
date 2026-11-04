@@ -12,7 +12,6 @@ def scope(**overrides) -> dict:
         "base_url": "https://staging.example.com",
         "allowed_path_prefixes": ["/shop"],
         "test_context_id": "synthetic-1",
-        "session_secret_ref": SECRET_REF,
         "mask_selectors": ["#card-number"],
     }
     body.update(overrides)
@@ -40,19 +39,27 @@ async def created(client, world, **body) -> dict:
     return response.json()
 
 
+async def bind_session(db_session, program_id: str) -> None:
+    """Operator-side: session refs are provisioned out of band, never through the API."""
+    await db_session.execute(
+        update(ProgramScopeRevision)
+        .where(ProgramScopeRevision.program_id == program_id)
+        .values(session_secret_ref=SECRET_REF)
+    )
+    await db_session.commit()
+
+
 async def test_admin_creates_program_rev1(client, world, db_session):
     response = await create(client, world)
     assert response.status_code == 201
     body = response.json()
     assert body["current_revision"] == 1
     assert body["status"] == "draft"
-    assert body["scope"]["has_session"] is True
+    assert body["scope"]["has_session"] is False
     assert body["scope"]["allowed_path_prefixes"] == ["/shop"]
-    assert SECRET_REF not in response.text
     assert "session_secret_ref" not in response.text
     assert "allow_private_targets" not in response.text
     row = await db_session.get(ProgramScopeRevision, (body["id"], 1))
-    assert row.session_secret_ref == SECRET_REF
     assert row.base_url == "https://staging.example.com/"
     actions = (await db_session.scalars(select(AuditEvent.action))).all()
     assert actions == ["program.create"]
@@ -68,7 +75,6 @@ async def test_invalid_scope_rejected_422(client, world):
     "overrides",
     [
         {"width": 100},
-        {"test_context_id": "anonymous"},  # session ref needs a synthetic context
         {"mask_selectors": ["#x"] * 31},
         {"mask_selectors": ["x" * 257]},
         {"mask_selectors": [""]},
@@ -81,7 +87,13 @@ async def test_invalid_run_options_422(client, world, overrides):
 
 
 @pytest.mark.parametrize(
-    "field", [{"allow_private_targets": True}, {"private_cidrs": ["10.0.0.0/8"]}]
+    "field",
+    [
+        {"allow_private_targets": True},
+        {"private_cidrs": ["10.0.0.0/8"]},
+        # Another org's worker secret must not be nameable by a customer admin.
+        {"session_secret_ref": "OTHER_ORG_ADMIN"},
+    ],
 )
 async def test_operator_only_fields_rejected(client, world, field):
     assert (await create(client, world, **field)).status_code == 422
@@ -93,7 +105,9 @@ async def test_patch_scope_creates_new_revision_keeps_old(client, world, db_sess
     await db_session.execute(
         update(ProgramScopeRevision)
         .where(ProgramScopeRevision.program_id == program["id"])
-        .values(allow_private_targets=True, private_cidrs=["10.1.0.0/16"])
+        .values(
+            allow_private_targets=True, private_cidrs=["10.1.0.0/16"], session_secret_ref=SECRET_REF
+        )
     )
     await db_session.commit()
     before = await db_session.get(ProgramScopeRevision, (program["id"], 1))
@@ -135,15 +149,26 @@ async def test_patch_status_or_same_scope_keeps_revision(client, world, db_sessi
     assert actions == ["program.create", "program.update"]
 
 
-async def test_patch_can_clear_session_ref(client, world):
+async def test_session_ref_not_patchable_and_dropped_on_origin_change(client, world, db_session):
     program = await created(client, world)
-    response = await client.patch(
-        f"/api/v1/programs/{program['id']}",
-        json={"session_secret_ref": None},
-        headers=world["admin"],
+    await bind_session(db_session, program["id"])
+    url = f"/api/v1/programs/{program['id']}"
+    for value in ("OTHER_ORG_ADMIN", None):
+        patch = await client.patch(url, json={"session_secret_ref": value}, headers=world["admin"])
+        assert patch.status_code == 422
+    # A bound session needs a synthetic test context.
+    anonymous = await client.patch(
+        url, json={"test_context_id": "anonymous"}, headers=world["admin"]
     )
-    assert response.json()["scope"]["has_session"] is False
-    assert response.json()["current_revision"] == 2
+    assert anonymous.json()["error"]["code"] == "INVALID_RUN_OPTIONS"
+    # Provisioned credentials are bound to their origin: moving base_url drops them.
+    moved = await client.patch(
+        url, json={"base_url": "https://attacker.example"}, headers=world["admin"]
+    )
+    assert moved.status_code == 200
+    assert moved.json()["scope"]["has_session"] is False
+    rev2 = await db_session.get(ProgramScopeRevision, (program["id"], 2))
+    assert rev2.session_secret_ref is None
 
 
 async def test_invalid_patch_does_not_create_revision(client, world, db_session):
@@ -172,7 +197,7 @@ async def test_developer_cannot_create_or_patch_403(client, world):
     # Developers can still read the full program.
     get = await client.get(f"/api/v1/programs/{program['id']}", headers=world["dev"])
     assert get.status_code == 200
-    assert get.json()["scope"]["has_session"] is True
+    assert get.json()["scope"]["has_session"] is False
 
 
 async def test_other_org_program_404(client, world):
@@ -249,6 +274,7 @@ async def test_invite_requires_admin_and_known_user(client, world):
 
 async def test_secret_ref_never_in_any_response(client, world, db_session):
     program = await created(client, world, status="active", submission_mode="open_authenticated")
+    await bind_session(db_session, program["id"])
     url = f"/api/v1/programs/{program['id']}"
     _, reporter_headers = await login_as(client, db_session)
     responses = [
@@ -261,6 +287,7 @@ async def test_secret_ref_never_in_any_response(client, world, db_session):
     for response in responses:
         assert response.status_code == 200
         assert SECRET_REF not in response.text
+    assert responses[-1].json()["scope"]["has_session"] is True  # carried into rev2
 
 
 async def test_unknown_reset_adapter_422(client, world):

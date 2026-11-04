@@ -251,7 +251,8 @@ async def test_login_throttled_after_5_failures_429(client, db_session):
     throttled = await login(client)  # correct password, still blocked for 15 minutes
     assert throttled.status_code == 429
     assert throttled.json()["error"]["code"] == "LOGIN_THROTTLED"
-    targets = (await db_session.scalars(select(AuditEvent.target))).all()
+    failed = AuditEvent.action == "auth.login_failed"
+    targets = (await db_session.scalars(select(AuditEvent.target).where(failed))).all()
     assert len(targets) == 5
     assert all(t and "@" not in t and len(t) == 64 for t in targets)  # sha256, never raw email
     # Another account is unaffected.
@@ -299,4 +300,5 @@ async def test_concurrent_failures_cannot_exceed_limit(client, db_session):
         *(login(client, password="wrong-password-123") for _ in range(10))
     )
     assert sorted(r.status_code for r in results) == [401] * 5 + [429] * 5
-    assert len((await db_session.scalars(select(AuditEvent.id))).all()) == 5
+    failed = AuditEvent.action == "auth.login_failed"
+    assert len((await db_session.scalars(select(AuditEvent.id).where(failed))).all()) == 5

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Response
 
 from app.api.dependencies import SESSION_COOKIE, CurrentUser, DbSession
+from app.core.client_ip import client_ip
 from app.core.config import get_settings
 from app.schemas.auth import (
     LoginRequest,
@@ -19,8 +20,9 @@ def _user(user) -> UserResponse:
 
 
 @router.post("/signup", status_code=201, response_model=UserResponse)
-async def signup(body: SignupRequest, db: DbSession) -> UserResponse:
-    return _user(await auth.signup(db, body.email, body.password, body.display_name))
+async def signup(body: SignupRequest, db: DbSession, request: Request) -> UserResponse:
+    user = await auth.signup(db, body.email, body.password, body.display_name, client_ip(request))
+    return _user(user)
 
 
 @router.post("/login", response_model=UserResponse)

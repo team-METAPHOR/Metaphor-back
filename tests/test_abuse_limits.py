@@ -77,3 +77,32 @@ async def test_widget_uses_forwarded_client_ip_behind_trusted_proxy(client, monk
     )
     assert response.status_code == 201, response.text
     assert seen == ["198.51.100.7"]
+
+
+async def test_signup_throttled_per_client_ip_429(client, db_session, monkeypatch):
+    from app.services.auth import SIGNUP_HOURLY_LIMIT
+
+    monkeypatch.setattr(get_settings(), "ip_hash_secret", "k")
+    for i in range(SIGNUP_HOURLY_LIMIT):
+        await signup(client, email=f"u{i}@example.com")
+    response = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "late@example.com", "password": "correct-horse-battery"},
+        headers={"Origin": "http://localhost:3000"},
+    )
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "SIGNUP_THROTTLED"
+    targets = (
+        await db_session.scalars(
+            select(AuditEvent.target).where(AuditEvent.action == "auth.signup")
+        )
+    ).all()
+    assert targets == [hmac.new(b"k", b"127.0.0.1", hashlib.sha256).hexdigest()] * 5
+    # Another client (behind a trusted proxy) is unaffected.
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["127.0.0.1"])
+    other = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "late@example.com", "password": "correct-horse-battery"},
+        headers={"Origin": "http://localhost:3000", "X-Forwarded-For": "198.51.100.7"},
+    )
+    assert other.status_code == 201, other.text

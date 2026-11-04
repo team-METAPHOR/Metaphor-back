@@ -13,12 +13,14 @@ from app.core.ids import new_id
 from app.models import AuditEvent, Session, User
 from app.repositories import users as repo
 from app.services.audit import record_audit
-from app.services.limits import enforce_rate_limit, since
+from app.services.limits import enforce_rate_limit, lock_key, since
 
 SESSION_TTL = timedelta(days=14)
 LOGIN_FAILED = "auth.login_failed"
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW = {"minutes": 15}
+SIGNUP = "auth.signup"
+SIGNUP_HOURLY_LIMIT = 5
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 
 
@@ -49,16 +51,39 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-async def signup(db: AsyncSession, email: str, password: str, display_name: str | None) -> User:
+async def signup(
+    db: AsyncSession, email: str, password: str, display_name: str | None, client_ip: str
+) -> User:
+    """Create a user. 5 signups per client IP per hour, counted from audit_events."""
     email = email.strip().lower()
+    ip_key = lookup_hash(client_ip)
     password_hash = await asyncio.to_thread(hash_password, password)
     async with db.begin():
+        await lock_key(db, f"signup:{ip_key}")
+        recent = (
+            select(func.count())
+            .select_from(AuditEvent)
+            .where(
+                AuditEvent.action == SIGNUP,
+                AuditEvent.target == ip_key,
+                AuditEvent.created_at >= since(hours=1),
+            )
+        )
+        await enforce_rate_limit(
+            db,
+            recent,
+            limit=SIGNUP_HOURLY_LIMIT,
+            code="SIGNUP_THROTTLED",
+            message="가입 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+        )
         if await repo.get_by_email(db, email):
             raise ApiError(409, "EMAIL_TAKEN", "Email is already registered")
         user = User(
             id=new_id(), email=email, password_hash=password_hash, display_name=display_name
         )
-        return await repo.add_user(db, user)
+        user = await repo.add_user(db, user)
+        await record_audit(db, actor_id=user.id, org_id=None, action=SIGNUP, target=ip_key)
+        return user
 
 
 async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]:

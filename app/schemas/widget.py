@@ -35,3 +35,79 @@ class WidgetSettingsResponse(BaseModel):
 
 class ProjectKeyResponse(BaseModel):
     public_project_key: str
+
+
+# --- public widget API -----------------------------------------------------
+
+
+class _Payload(BaseModel):
+    # Whitelist only: no header, cookie or request/response body fields exist, and unknown
+    # fields are rejected.
+    model_config = ConfigDict(extra="forbid")
+
+
+class HttpInfo(_Payload):
+    method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    path: str = Field(max_length=2048)
+    status: int
+
+
+class ErrorInfo(_Payload):
+    message: str = Field(max_length=1000)
+    stack_top: str | None = Field(default=None, max_length=300, pattern=r"^.+:\d+:\d+$")
+    http: HttpInfo | None = None
+
+
+class Viewport(_Payload):
+    width: int = Field(ge=1, le=10000)
+    height: int = Field(ge=1, le=10000)
+
+
+class Environment(_Payload):
+    user_agent: str = Field(default="", max_length=512)
+    language: str = Field(default="", max_length=35)
+    timezone: str = Field(default="", max_length=64)
+    viewport: Viewport | None = None
+
+
+class Consent(_Payload):
+    environment: bool = False
+    screenshot: bool = False
+
+
+class WidgetReportPayload(_Payload):
+    title: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=8000)
+    page_url: str = Field(max_length=2048)
+    error_type: Literal["manual", "js_error", "unhandled_rejection", "http_5xx"] = "manual"
+    error: ErrorInfo | None = None
+    environment: Environment | None = None
+    mask_boxes: list[list[int]] | None = Field(default=None, max_length=20)
+    consent: Consent = Consent()
+
+
+class AutoDetect(BaseModel):
+    enabled: bool
+    js_error: bool
+    unhandled_rejection: bool
+    http_5xx: bool
+
+
+class WidgetLimits(BaseModel):
+    max_screenshot_bytes: int
+    max_description: int
+    max_mask_boxes: int
+
+
+class WidgetConfig(BaseModel):
+    widget_enabled: bool
+    reporting_enabled: bool
+    screenshot_allowed: bool
+    auto_detect: AutoDetect
+    limits: WidgetLimits
+
+
+class WidgetReceipt(BaseModel):
+    receipt_id: str | None
+    status: Literal["received", "duplicate"]
+    created_at: datetime | None = None

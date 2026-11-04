@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers, request_id_middleware
 from app.core.logging import configure_logging
 from app.core.security_headers import security_headers_middleware
+from app.core.widget_cors import widget_cors_middleware
 from app.db.session import engine
 
 
@@ -29,6 +30,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 # Added last = outermost: request id wraps everything, including security headers.
+app.middleware("http")(widget_cors_middleware)
 app.middleware("http")(security_headers_middleware)
 app.middleware("http")(request_id_middleware)
 register_exception_handlers(app)

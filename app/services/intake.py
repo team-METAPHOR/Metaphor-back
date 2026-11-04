@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from core_engine import PolicyError, RunPolicy, Screenshot
 from fastapi import UploadFile
@@ -90,16 +90,33 @@ def _scope_error(reason: str) -> ApiError:
     )
 
 
+def _decoded(text: str) -> str:
+    """Percent-decode until stable (bounded), so double-encoded PII is still seen."""
+    for _ in range(3):
+        decoded = unquote(text, errors="strict")
+        if decoded == text:
+            break
+        text = decoded
+    return text
+
+
+def _has_pii(text: str) -> bool:
+    return redact(text) != text
+
+
 def _drop_pii_params(url: str) -> tuple[str, bool]:
-    """Drop query parameters whose value `redact` would change (phone, email, RRN, ...)."""
+    """Drop query parameters whose key or value carries PII (phone, email, RRN, ...).
+
+    An undecodable query is removed entirely (fail closed)."""
     parts = urlsplit(url)
     if not parts.query:
         return url, False
+    stripped = urlunsplit((*parts[:3], "", ""))
     try:
-        pairs = parse_qsl(parts.query, keep_blank_values=True)
-    except ValueError:
-        return url, False  # malformed query: the scope check rejects or strips it
-    kept = [(key, value) for key, value in pairs if redact(value) == value]
+        pairs = parse_qsl(parts.query, keep_blank_values=True, errors="strict")
+        kept = [(k, v) for k, v in pairs if not _has_pii(_decoded(k)) and not _has_pii(_decoded(v))]
+    except (ValueError, UnicodeDecodeError):
+        return stripped, True
     if len(kept) == len(pairs):
         return url, False
     return urlunsplit((*parts[:3], urlencode(kept), "")), True

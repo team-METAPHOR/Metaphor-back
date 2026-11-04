@@ -129,6 +129,9 @@ async def test_check_target_url_strips_sensitive_query(db_session, world):
         ("?mail=a%40b.com&page=2", "?page=2", True),
         ("?q=cat&date=2026-11-05&id=a3f2c4e5b6d7890112345678901234ab", None, False),
         ("?token=abc&phone=010-1234-5678&q=1", "", True),
+        ("?010-1234-5678=1&q=1", "?q=1", True),  # PII in the key
+        ("?q=1&p=010%252D1234%252D5678", "?q=1", True),  # double-encoded value
+        ("?q=%E0%A4%A&p=1", "", True),  # undecodable: fail closed
     ],
 )
 async def test_check_target_url_drops_pii_query_values(

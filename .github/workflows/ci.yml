@@ -67,6 +67,10 @@ jobs:
         if: hashFiles('migrations/versions/*.py') != ''
         run: uv run alembic upgrade head
 
+      - name: Install Chromium for browser tests
+        if: hashFiles('tests/e2e/*.py') != ''
+        run: uv run playwright install --with-deps chromium --only-shell
+
       - name: Tests
         if: hashFiles('tests/**/*.py') != ''
         run: uv run pytest -q

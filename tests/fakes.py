@@ -76,3 +76,51 @@ def fake_run(*, analysis=True, error_code=None, events=("interpreting", "running
         return result
 
     return run
+
+
+def check(selector, value, kind="text", other=""):
+    return {"kind": kind, "selector": selector, "value": value, "other_selector": other}
+
+
+def plan(url):
+    """Two-step search scenario for tests.e2e.site (search 'cat', then a query with no results)."""
+    return {
+        "status": "ready",
+        "questions": [],
+        "rationale": "정상 검색 다음 빈 검색 결과 확인",
+        "plan": {
+            "steps": [
+                {"action": "navigate", "target": url, "value": ""},
+                {"action": "fill", "target": "#query", "value": "cat"},
+                {"action": "click", "target": "#search", "value": ""},
+                {"action": "assert_text", "target": "#result", "value": "cat"},
+                {"action": "fill", "target": "#query", "value": "missing"},
+                {"action": "click", "target": "#search", "value": ""},
+            ],
+            "ready": check("#ready", "done"),
+            "expected": check("#result", "empty"),
+            "symptom": check("#result", "cat"),
+        },
+    }
+
+
+def analysis():
+    return {
+        "classification": "functional",
+        "confidence": "medium",
+        "classification_reason": "검색 결과 갱신 문제",
+        "severity": "low",
+        "severity_reason": "화면 결과 혼동 가능",
+        "summary": "빈 검색 결과에서 이전 목록이 남는 문제입니다.",
+        "hypotheses": [{"description": "빈 응답 처리 누락 가능성", "source_refs": ["report"]}],
+        "solutions": [
+            {
+                "title": "빈 결과 갱신",
+                "description": "빈 결과에도 목록 상태를 갱신합니다.",
+                "source_refs": ["report"],
+                "verification_steps": ["결과 있음 다음 빈 검색 확인"],
+                "tradeoffs": ["로딩 상태와 구분 필요"],
+            }
+        ],
+        "missing_information": ["관련 소스 코드"],
+    }

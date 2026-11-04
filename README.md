@@ -107,7 +107,9 @@ uv run alembic upgrade head
 
 ```bash
 docker compose up -d db        # 테스트 DB는 체크아웃(worktree)마다 metaphor_test_<해시>로 자동 생성
-uv run pytest -q
+uv run playwright install chromium --only-shell   # 브라우저 인수 테스트(tests/e2e)용, 최초 1회
+uv run pytest -q               # 단위·통합 + 실제 Chromium 인수 테스트(모델은 가짜 응답)
+OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.4-mini uv run pytest -m e2e   # 실제 모델 인수 테스트
 uv run ruff check .
 uv run ruff format --check .
 ```

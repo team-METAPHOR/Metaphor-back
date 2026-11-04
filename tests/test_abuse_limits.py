@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 
+import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -106,3 +107,43 @@ async def test_signup_throttled_per_client_ip_429(client, db_session, monkeypatc
         headers={"Origin": "http://localhost:3000", "X-Forwarded-For": "198.51.100.7"},
     )
     assert other.status_code == 201, other.text
+
+
+@pytest.mark.parametrize(
+    "hop",
+    [
+        "198.51.100.7",
+        " 198.51.100.7 ",
+        "198.51.100.7:5555",
+        "::ffff:198.51.100.7",
+        "[::ffff:198.51.100.7]:443",
+    ],
+)
+def test_client_ip_canonicalizes_hop_variants(monkeypatch, hop):
+    from app.core.client_ip import client_ip
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.0/8"])
+    assert client_ip(_request("10.0.0.5", [hop])) == "198.51.100.7"
+
+
+@pytest.mark.parametrize("hop", ["[2001:db8::1]", "[2001:DB8:0::1]:8080", "2001:db8:0:0::1"])
+def test_client_ip_canonicalizes_ipv6(monkeypatch, hop):
+    from app.core.client_ip import client_ip
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.0/8"])
+    assert client_ip(_request("10.0.0.5", [hop])) == "2001:db8::1"
+
+
+@pytest.mark.parametrize("hop", ["garbage", "unknown", "1.2.3.4.5", "", "[::1"])
+def test_client_ip_unparsable_hop_falls_back_to_peer(monkeypatch, hop):
+    from app.core.client_ip import client_ip
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", ["10.0.0.0/8"])
+    assert client_ip(_request("10.0.0.5", [f"6.6.6.6, {hop}"])) == "10.0.0.5"
+
+
+def test_client_ip_canonicalizes_peer(monkeypatch):
+    from app.core.client_ip import client_ip
+
+    monkeypatch.setattr(get_settings(), "trusted_proxies", [])
+    assert client_ip(_request("::ffff:203.0.113.9")) == "203.0.113.9"

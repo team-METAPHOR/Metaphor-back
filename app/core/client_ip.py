@@ -6,13 +6,30 @@ from starlette.requests import Request
 
 from app.core.config import get_settings
 
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-def _trusted(address: str, networks: list) -> bool:
+
+def parse_ip(value: str) -> IPAddress | None:
+    """Canonical address from "1.2.3.4", "1.2.3.4:80", "[v6]:443", "::ffff:1.2.3.4"; else None.
+
+    One client must map to one rate-limit key, so ports, brackets, zone ids, case and
+    IPv4-mapped IPv6 forms are normalized away.
+    """
+    value = value.strip()
+    if value.startswith("["):
+        host, sep, rest = value[1:].partition("]")
+        if not sep or (rest and not rest.startswith(":")):
+            return None
+        value = host
+    elif value.count(":") == 1:
+        value = value.split(":", 1)[0]
     try:
-        ip = ipaddress.ip_address(address)
+        ip = ipaddress.ip_address(value.split("%", 1)[0])
     except ValueError:
-        return False
-    return any(ip in net for net in networks)
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return ip.ipv4_mapped
+    return ip
 
 
 def client_ip(request: Request) -> str:
@@ -20,13 +37,24 @@ def client_ip(request: Request) -> str:
 
     XFF is ignored unless the direct peer is in settings.trusted_proxies, so clients cannot
     spoof it. Entries left of the first untrusted hop are client-controlled and never used.
+    An unparsable hop stops the walk and the (trusted) peer is returned instead.
     """
-    peer = request.client.host if request.client else ""
+    raw_peer = request.client.host if request.client else ""
+    peer = parse_ip(raw_peer)
+    if peer is None:
+        return raw_peer
     networks = [ipaddress.ip_network(n, strict=False) for n in get_settings().trusted_proxies]
-    if not _trusted(peer, networks):
-        return peer
-    hops = [h.strip() for v in request.headers.getlist("x-forwarded-for") for h in v.split(",")]
+
+    def trusted(ip: IPAddress) -> bool:
+        return any(ip in net for net in networks)
+
+    if not trusted(peer):
+        return str(peer)
+    hops = [h for v in request.headers.getlist("x-forwarded-for") for h in v.split(",")]
     for hop in reversed(hops):
-        if hop and not _trusted(hop, networks):
-            return hop
-    return peer
+        ip = parse_ip(hop)
+        if ip is None:
+            return str(peer)
+        if not trusted(ip):
+            return str(ip)
+    return str(peer)

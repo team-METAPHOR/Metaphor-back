@@ -147,3 +147,18 @@ def test_client_ip_canonicalizes_peer(monkeypatch):
 
     monkeypatch.setattr(get_settings(), "trusted_proxies", [])
     assert client_ip(_request("::ffff:203.0.113.9")) == "203.0.113.9"
+
+
+async def test_oversized_request_413_envelope(client):
+    from app.core.body_limit import MAX_REQUEST_BYTES
+
+    response = await client.post(
+        "/api/v1/reports",
+        content=b"x" * (MAX_REQUEST_BYTES + 1),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 413
+    error = response.json()["error"]
+    assert error["code"] == "PAYLOAD_TOO_LARGE"
+    assert error["request_id"] == response.headers["X-Request-Id"]
+    assert MAX_REQUEST_BYTES == 6 * 1024 * 1024

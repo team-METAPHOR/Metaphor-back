@@ -1,7 +1,6 @@
 """Public Web SDK API: config lookup and anonymous report intake (no cookies, no CSRF)."""
 
 import hashlib
-import hmac
 import json
 import re
 from datetime import UTC, datetime
@@ -11,8 +10,8 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.errors import ApiError
+from app.core.hashing import keyed_hash
 from app.core.text import redact, sanitize_text
 from app.models import Program, ProgramScopeRevision, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
@@ -104,10 +103,10 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
 
 
 def ip_hash(ip: str) -> str:
-    secret = get_settings().ip_hash_secret
-    if not secret:
+    hashed = keyed_hash(ip)
+    if hashed is None:
         raise ApiError(503, "WIDGET_UNAVAILABLE", "위젯 신고를 일시적으로 받을 수 없습니다.")
-    return hmac.new(secret.encode(), ip.encode(), hashlib.sha256).hexdigest()
+    return hashed
 
 
 def parse_payload(raw: str) -> WidgetReportPayload:

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.core.hashing import lookup_hash
 from app.core.ids import new_id
 from app.models import AuditEvent, Session, User
 from app.repositories import users as repo
@@ -65,10 +66,10 @@ async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]
 
     5 failures for one email within 15 minutes block that email, even with the right password.
     Failures are counted from audit_events (shared by every API process), keyed by
-    sha256(email) so the raw address is never stored.
+    lookup_hash(email) so the raw address is never stored.
     """
     email = email.strip().lower()
-    email_hash = hashlib.sha256(email.encode()).hexdigest()
+    email_hash = lookup_hash(email)
     async with db.begin():
         # Serialize logins per email until commit, so the count-then-record below is atomic.
         await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(email_hash, 0))))

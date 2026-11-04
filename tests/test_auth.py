@@ -289,3 +289,14 @@ async def test_password_change_revokes_sessions(client, db_session):
     await change_password(db_session, user["id"], PASSWORD, "new-password-456")
     assert (await client.get("/api/v1/auth/me", headers=as_user(token))).status_code == 401
     assert (await login(client, password="new-password-456")).status_code == 200
+
+
+async def test_concurrent_failures_cannot_exceed_limit(client, db_session):
+    import asyncio
+
+    await signup(client)
+    results = await asyncio.gather(
+        *(login(client, password="wrong-password-123") for _ in range(10))
+    )
+    assert sorted(r.status_code for r in results) == [401] * 5 + [429] * 5
+    assert len((await db_session.scalars(select(AuditEvent.id))).all()) == 5

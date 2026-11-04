@@ -70,6 +70,8 @@ async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]
     email = email.strip().lower()
     email_hash = hashlib.sha256(email.encode()).hexdigest()
     async with db.begin():
+        # Serialize logins per email until commit, so the count-then-record below is atomic.
+        await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(email_hash, 0))))
         failures = (
             select(func.count())
             .select_from(AuditEvent)

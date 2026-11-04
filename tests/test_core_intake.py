@@ -121,6 +121,27 @@ async def test_check_target_url_strips_sensitive_query(db_session, world):
 
 
 @pytest.mark.parametrize(
+    ("query", "expected", "stripped"),
+    [
+        ("?name=x&phone=010-1234-5678", "?name=x", True),
+        ("?phone=%2B82-10-1234-5678&q=cat", "?q=cat", True),
+        ("?rrn=900101-1234567", "", True),
+        ("?mail=a%40b.com&page=2", "?page=2", True),
+        ("?q=cat&date=2026-11-05&id=a3f2c4e5b6d7890112345678901234ab", None, False),
+        ("?token=abc&phone=010-1234-5678&q=1", "", True),
+    ],
+)
+async def test_check_target_url_drops_pii_query_values(
+    db_session, world, query, expected, stripped
+):
+    _, _, program = world
+    rev = await revision(db_session, program)
+    url, was_stripped = check_target_url(rev, f"https://staging.example.com/search{query}")
+    expected = query if expected is None else expected
+    assert (url, was_stripped) == (f"https://staging.example.com/search{expected}", stripped)
+
+
+@pytest.mark.parametrize(
     ("url", "reason"),
     [
         ("https://evil.example.com/search", "ORIGIN_OUT_OF_SCOPE"),

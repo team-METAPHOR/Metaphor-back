@@ -2,12 +2,13 @@
 
 import json
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from core_engine import PolicyError, RunPolicy, Screenshot
 from fastapi import UploadFile
 
 from app.core.errors import ApiError
+from app.core.text import redact
 from app.models import Program, ProgramScopeRevision
 
 MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
@@ -89,15 +90,31 @@ def _scope_error(reason: str) -> ApiError:
     )
 
 
+def _drop_pii_params(url: str) -> tuple[str, bool]:
+    """Drop query parameters whose value `redact` would change (phone, email, RRN, ...)."""
+    parts = urlsplit(url)
+    if not parts.query:
+        return url, False
+    try:
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return url, False  # malformed query: the scope check rejects or strips it
+    kept = [(key, value) for key, value in pairs if redact(value) == value]
+    if len(kept) == len(pairs):
+        return url, False
+    return urlunsplit((*parts[:3], urlencode(kept), "")), True
+
+
 def check_target_url(revision: ProgramScopeRevision, url: str) -> tuple[str, bool]:
-    """Return (canonical in-scope URL, query_stripped). Fragments are always dropped; a query
-    with sensitive keys (token, session, ...) is removed entirely before the scope check."""
+    """Return (canonical in-scope URL, query_stripped). Fragments are always dropped; query
+    parameters with PII values are dropped; a query with sensitive keys (token, session, ...)
+    is removed entirely before the scope check."""
     if not isinstance(url, str) or len(url) > 2048:
         raise _scope_error("INVALID_URL")
     policy = run_policy(revision)
-    url = url.split("#", 1)[0]
+    url, dropped = _drop_pii_params(url.split("#", 1)[0])
     try:
-        return policy.check_url(url), False
+        return policy.check_url(url), dropped
     except PolicyError as error:
         if error.code != "SENSITIVE_QUERY_KEY":
             raise _scope_error(error.code) from None

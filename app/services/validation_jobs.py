@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.models import ValidationJob
+from app.models import Clarification, ValidationJob
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
 from app.services.access import org_role
@@ -71,8 +71,19 @@ async def list_events(
 
 
 CANCEL_ROLES = ("reviewer", "admin")
-# A reporter may stop jobs that came from their own submission or answer.
-REPORTER_CANCELLABLE_KINDS = ("initial", "resume")
+
+
+async def _reporter_started(db: AsyncSession, user_id: str, job: ValidationJob) -> bool:
+    """A reporter may stop only jobs they caused: the initial job of their own report (access is
+    already 'author') or a resume created from *their* answer — not one an org member started."""
+    if job.kind == "initial":
+        return True
+    if job.kind == "resume":
+        author = await db.scalar(
+            select(Clarification.author_id).where(Clarification.created_job_id == job.id)
+        )
+        return author == user_id
+    return False
 
 
 async def cancel_job(db: AsyncSession, user_id: str, job_id: str) -> dict:
@@ -83,7 +94,7 @@ async def cancel_job(db: AsyncSession, user_id: str, job_id: str) -> dict:
         if access == "org":
             allowed = await org_role(db, user_id, report.org_id) in CANCEL_ROLES
         else:
-            allowed = job.kind in REPORTER_CANCELLABLE_KINDS
+            allowed = await _reporter_started(db, user_id, job)
         if not allowed:
             raise ApiError(403, "FORBIDDEN", "작업을 취소할 권한이 없습니다.")
 

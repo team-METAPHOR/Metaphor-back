@@ -272,3 +272,28 @@ async def test_session_secret_is_scoped_to_owning_org(db_session, conn, monkeypa
 def test_session_secret_ref_pattern():
     with pytest.raises(runner.JobInputError):
         runner.session_secret_env_name("a" * 32, "../etc")
+
+
+async def test_resume_runs_engine_with_answers(db_session, conn):
+    from app.services.clarifications import answer_question
+
+    _, job_id = await queued_job(db_session, conn)
+    await asyncio.to_thread(runner.execute_job, job_id, model=ScriptedModel([intake("needs_info")]))
+    first = await job_row(db_session, job_id)
+    from app.models import Report
+
+    report = await db_session.get(Report, first.report_id)
+    await db_session.commit()
+    status, body = await answer_question(
+        db_session, report.author_id, report.id, job_id, "cat은 결과가 있습니다", None
+    )
+    assert status == 202
+    resume_id = queue.claim_next(conn, "w1", lease_seconds=30)
+    assert resume_id == body["validation_job_id"]
+    model = ScriptedModel([intake("needs_info")])
+    await asyncio.to_thread(runner.execute_job, resume_id, model=model)
+    resumed = await job_row(db_session, resume_id)
+    assert resumed.status == "needs_info"
+    assert resumed.engine_job_id not in (None, first.engine_job_id)
+    sent = json.dumps(model.calls[0]["context"], ensure_ascii=False)
+    assert "추가 답변" in sent and "cat은 결과가 있습니다" in sent

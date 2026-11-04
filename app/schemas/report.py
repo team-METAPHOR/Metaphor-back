@@ -40,3 +40,15 @@ class ReportDetail(ReportItem):
     input_artifact_id: str | None
     # Org members only; None for the reporter view.
     client_context: dict | None = None
+
+
+class ClarificationCreate(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    source_job_id: str
+    answers: str
+
+
+class JobQueued(BaseModel):
+    validation_job_id: str
+    status: str

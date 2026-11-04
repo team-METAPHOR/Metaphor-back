@@ -4,7 +4,14 @@ from fastapi import APIRouter, File, Form, Header, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import CurrentUser, DbSession
-from app.schemas.report import ReportCreated, ReportDetail, ReportList
+from app.schemas.report import (
+    ClarificationCreate,
+    JobQueued,
+    ReportCreated,
+    ReportDetail,
+    ReportList,
+)
+from app.services import clarifications
 from app.services import reports as service
 from app.services.intake import read_upload_capped
 
@@ -56,3 +63,17 @@ async def list_reports(
 @router.get("/{report_id}", response_model=ReportDetail)
 async def get_report(report_id: str, user: CurrentUser, db: DbSession):
     return await service.get_report(db, user.id, report_id)
+
+
+@router.post("/{report_id}/clarifications", status_code=202, response_model=JobQueued)
+async def answer_question(
+    report_id: str,
+    body: ClarificationCreate,
+    user: CurrentUser,
+    db: DbSession,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+):
+    status, payload = await clarifications.answer_question(
+        db, user.id, report_id, body.source_job_id, body.answers, idempotency_key
+    )
+    return JSONResponse(payload, status_code=status)

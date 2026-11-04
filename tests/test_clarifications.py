@@ -49,7 +49,11 @@ async def test_answer_creates_resume_job_linked(client, db_session, world):
     new_id = response.json()["validation_job_id"]
     assert response.json()["status"] == "queued"
     new = await db_session.get(ValidationJob, new_id)
-    assert (new.kind, new.parent_job_id, new.answers) == ("resume", world["job_id"], "cat은 결과 있음")
+    assert (new.kind, new.parent_job_id, new.answers) == (
+        "resume",
+        world["job_id"],
+        "cat은 결과 있음",
+    )
     old = await db_session.get(ValidationJob, world["job_id"], populate_existing=True)
     assert old.status == "needs_info"
     row = await db_session.scalar(select(Clarification))

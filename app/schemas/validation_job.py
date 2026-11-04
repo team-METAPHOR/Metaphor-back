@@ -48,3 +48,8 @@ class EventOut(BaseModel):
 
 class EventList(BaseModel):
     items: list[EventOut]
+
+
+class JobCancelled(BaseModel):
+    id: str
+    status: str  # "cancelled" (was queued) or "cancelling" (worker stopping it)

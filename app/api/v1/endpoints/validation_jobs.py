@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from app.api.dependencies import CurrentUser, DbSession
-from app.schemas.validation_job import EventList, JobOut, JobResult
+from app.schemas.validation_job import EventList, JobCancelled, JobOut, JobResult
 from app.services import validation_jobs as service
 
 router = APIRouter(prefix="/validation-jobs", tags=["validation-jobs"])
@@ -28,3 +28,8 @@ async def list_events(
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ):
     return await service.list_events(db, user.id, job_id, after=after, limit=limit)
+
+
+@router.post("/{job_id}/cancel", status_code=202, response_model=JobCancelled)
+async def cancel_job(job_id: str, user: CurrentUser, db: DbSession):
+    return await service.cancel_job(db, user.id, job_id)

@@ -103,6 +103,12 @@ uv run alembic upgrade head
 
 앱 시작 시 테이블을 자동 생성하지 않습니다. 스키마 변경은 Alembic으로 관리합니다.
 
+## Web SDK
+
+고객사 사이트에 설치하는 Metaphor Web SDK가 호출하는 공개 API(`/api/v1/widget/*`)는
+[docs/api/widget-sdk.md](docs/api/widget-sdk.md)에 정리했습니다. 프로젝트 키와 Origin 등록, 요청·응답 형식,
+오류 코드, CORS, 재시도 규칙, 보내면 안 되는 정보, curl·fetch 예시가 있습니다.
+
 ## 개발 확인
 
 ```bash

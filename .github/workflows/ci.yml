@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: metaphor
+          POSTGRES_PASSWORD: metaphor
+          POSTGRES_DB: metaphor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U metaphor -d metaphor"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # metaphor-core-engine is a private repo in this org; GITHUB_TOKEN cannot read it.
+      # CORE_ENGINE_TOKEN: fine-grained token with read-only Contents on team-METAPHOR/Core_engine.
+      - name: Configure access to private core engine
+        env:
+          CORE_ENGINE_TOKEN: ${{ secrets.CORE_ENGINE_TOKEN }}
+        run: |
+          if [ -z "$CORE_ENGINE_TOKEN" ]; then
+            echo "::warning::CORE_ENGINE_TOKEN secret is not set; installing the private core engine will fail."
+          else
+            git config --global \
+              url."https://x-access-token:${CORE_ENGINE_TOKEN}@github.com/team-METAPHOR/".insteadOf \
+              "https://github.com/team-METAPHOR/"
+          fi
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups --locked
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Migrations apply cleanly
+        if: hashFiles('migrations/versions/*.py') != ''
+        run: uv run alembic upgrade head
+
+      - name: Tests
+        if: hashFiles('tests/**/*.py') != ''
+        run: uv run pytest -q

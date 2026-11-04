@@ -1,6 +1,9 @@
+import hashlib
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+import psycopg
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -10,10 +13,20 @@ from app.db.session import get_db_session
 from app.main import app
 from app.models import Base
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql+psycopg://metaphor:metaphor@localhost:5432/metaphor_test",
-)
+_BASE_URL = "postgresql+psycopg://metaphor:metaphor@localhost:5432"
+
+
+def _default_test_database_url() -> str:
+    """One test DB per checkout/worktree so parallel agents don't TRUNCATE each other's data."""
+    suffix = hashlib.sha1(str(Path(__file__).resolve().parent).encode()).hexdigest()[:8]
+    name = f"metaphor_test_{suffix}"
+    with psycopg.connect(_BASE_URL.replace("+psycopg", "") + "/metaphor", autocommit=True) as conn:
+        if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
+            conn.execute(f'CREATE DATABASE "{name}"')
+    return f"{_BASE_URL}/{name}"
+
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or _default_test_database_url()
 
 
 @pytest.fixture(scope="session")

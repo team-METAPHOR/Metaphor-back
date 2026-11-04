@@ -152,7 +152,7 @@ async def test_widget_settings_defaults_off(db_session):
 
 def test_alembic_upgrade_matches_models():
     """Fresh DB → `alembic upgrade head` → `alembic check` finds no model drift."""
-    name = "metaphor_migration_check"
+    name = TEST_DATABASE_URL.rsplit("/", 1)[1] + "_migration"
     admin_url = TEST_DATABASE_URL.replace("+psycopg", "")
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(f'DROP DATABASE IF EXISTS "{name}"')

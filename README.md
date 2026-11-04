@@ -93,7 +93,7 @@ uv run alembic upgrade head
 ## 개발 확인
 
 ```bash
-docker compose up -d db        # metaphor_test DB는 최초 볼륨 생성 시 자동 생성
+docker compose up -d db        # 테스트 DB는 체크아웃(worktree)마다 metaphor_test_<해시>로 자동 생성
 uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .

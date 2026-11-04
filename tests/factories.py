@@ -66,3 +66,27 @@ async def make_report(session, org, program, author=None, **kwargs):
     session.add(report)
     await session.flush()
     return report
+
+
+TEST_PASSWORD = "correct-horse-battery"
+PLATFORM_ORIGIN = "http://localhost:3000"
+
+
+async def login_as(client, session, org=None, role=None, email=None):
+    """Seed a user (optionally an org member), commit, log in through the API.
+
+    Returns (user, headers). The sid cookie is Secure, so it is sent as an explicit header,
+    together with an allowed Origin for unsafe methods.
+    """
+    from app.services.auth import hash_password
+
+    user = await make_user(session, org, role, email)
+    user.password_hash = hash_password(TEST_PASSWORD)
+    await session.commit()
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": user.email, "password": TEST_PASSWORD},
+        headers={"Origin": PLATFORM_ORIGIN},
+    )
+    assert response.status_code == 200, response.text
+    return user, {"Cookie": f"sid={response.cookies['sid']}", "Origin": PLATFORM_ORIGIN}

@@ -57,6 +57,12 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
+      # compose creates metaphor_test via an init script; the CI service container doesn't.
+      - name: Create test database
+        env:
+          PGPASSWORD: metaphor
+        run: psql -h localhost -U metaphor -d metaphor -c "CREATE DATABASE metaphor_test"
+
       - name: Migrations apply cleanly
         if: hashFiles('migrations/versions/*.py') != ''
         run: uv run alembic upgrade head

@@ -9,14 +9,45 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from app.core.ids import new_id
+from app.core.text import redact, redact_tree
 from app.integrations import storage
 
 _KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json"}
+# Engine inputs that resume/retest replay. request.json text was redacted at intake and its
+# entry_url query must survive; scenario.json's plan is digest-checked, so only the rest of it
+# is redacted.
+_KEEP_FILE = "request.json"
+_KEEP_KEYS = {"scenario.json": ("plan",)}
 
 
 def normalize(raw: dict) -> dict:
     """JSON round-trip (enums → str, tuples → lists) so what we store equals what we serve."""
     return json.loads(json.dumps(raw, default=str))
+
+
+def redact_file(path: Path) -> bytes:
+    """Rewrite an engine .md/.json file with PII redacted (model output can copy it from a
+    screenshot) and return the bytes now on disk, so the stored hash matches what is served."""
+    data = path.read_bytes()
+    if path.name == _KEEP_FILE or path.suffix not in (".md", ".json"):
+        return data
+    if path.suffix == ".md":
+        clean = redact(data.decode("utf-8", errors="replace")).encode()
+    else:
+        try:
+            value = json.loads(data)
+        except ValueError:
+            return data
+        keep = _KEEP_KEYS.get(path.name, ())
+        if isinstance(value, dict) and keep:
+            value = {k: v if k in keep else redact_tree(v) for k, v in value.items()}
+        else:
+            value = redact_tree(value)
+        # Same encoding the engine's JobStore uses, so it can still read the file back.
+        clean = json.dumps(value, ensure_ascii=True, indent=2, allow_nan=False).encode()
+    if clean != data:
+        storage.write_private(path, clean)
+    return clean
 
 
 def read_events(engine_dir: Path) -> list[dict]:
@@ -35,7 +66,13 @@ def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path) -> None
             "INSERT INTO job_events (job_id, engine_sequence, kind, detail, created_at) "
             "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (job_id, engine_sequence) DO NOTHING",
             [
-                (job_id, e["sequence"], e["kind"], Jsonb(e.get("detail") or {}), e["created_at"])
+                (
+                    job_id,
+                    e["sequence"],
+                    e["kind"],
+                    Jsonb(redact_tree(e.get("detail") or {})),
+                    e["created_at"],
+                )
                 for e in events
             ],
         )
@@ -58,7 +95,7 @@ def persist_result(
 ) -> bool:
     """Apply the engine result if the job is still active. Returns False (and writes nothing)
     when the job already reached a terminal state elsewhere — a result never overwrites one."""
-    raw = normalize(raw)
+    raw = redact_tree(normalize(raw))
     report = raw.get("report") or {}
     run = report.get("run") or {}
     verdict = run.get("verdict") or {}
@@ -112,7 +149,7 @@ def persist_result(
             kind = _KINDS.get(path.suffix)
             if kind is None or not path.is_file() or path.is_symlink():
                 continue
-            data = path.read_bytes()
+            data = redact_file(path)
             conn.execute(
                 "INSERT INTO artifacts (id, org_id, report_id, job_id, kind, storage_key, sha256, "
                 "size, visibility, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'org', %s)",

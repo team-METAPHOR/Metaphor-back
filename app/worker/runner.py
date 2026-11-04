@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import asdict
@@ -61,11 +62,21 @@ def context_lock_key(org_id: str, test_context_id: str) -> str:
     return f"test-context:{org_id}:{test_context_id}"
 
 
-def load_session_headers(ref: str | None) -> dict[str, str]:
-    """ponytail: env-backed secret store (QA_SESSION_<REF> = JSON dict); swap for a vault later."""
+_SECRET_REF = re.compile(r"[A-Za-z0-9_]{1,64}")
+
+
+def session_secret_env_name(org_id: str, ref: str) -> str:
+    """Secrets are namespaced by the owning org, so one org can't point at another's ref."""
+    if not _SECRET_REF.fullmatch(ref) or not _SECRET_REF.fullmatch(org_id):
+        raise JobInputError("SESSION_SECRET_INVALID")
+    return f"QA_SESSION_{org_id.upper()}_{ref.upper()}"
+
+
+def load_session_headers(org_id: str, ref: str | None) -> dict[str, str]:
+    """ponytail: env-backed secret store (QA_SESSION_<ORG>_<REF> = JSON dict); vault later."""
     if not ref:
         return {}
-    value = os.environ.get("QA_SESSION_" + ref.upper().replace("-", "_"))
+    value = os.environ.get(session_secret_env_name(org_id, ref))
     if value is None:
         raise JobInputError("SESSION_SECRET_MISSING")
     headers = json.loads(value)
@@ -90,7 +101,9 @@ def build_service(snapshot: dict, store: JobStore, model, app_version: str | Non
         app_version=app_version or snapshot["app_version"],
         test_context_id=snapshot["test_context_id"],
         mask_selectors=tuple(snapshot.get("mask_selectors", ())),
-        session_headers=load_session_headers(snapshot.get("session_secret_ref")),
+        session_headers=load_session_headers(
+            snapshot["org_id"], snapshot.get("session_secret_ref")
+        ),
     )
     return QAService(model, policy, store, options=options)
 

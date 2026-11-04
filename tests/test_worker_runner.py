@@ -204,10 +204,11 @@ async def test_authorization_revoked_when_program_paused(db_session, conn, monke
 
 
 async def test_session_secret_never_persisted(db_session, conn, monkeypatch):
-    monkeypatch.setenv("QA_SESSION_SHOP", json.dumps({"Cookie": "sid=TOPSECRET123"}))
-    _, job_id = await queued_job(
+    program, job_id = await queued_job(
         db_session, conn, session_secret_ref="shop", test_context_id="synthetic-1"
     )
+    name = runner.session_secret_env_name(program.owner_org_id, "shop")
+    monkeypatch.setenv(name, json.dumps({"Cookie": "sid=TOPSECRET123"}))
     captured = {}
     original = runner.build_service
 
@@ -253,3 +254,21 @@ def _lock_parts(conn, job_id):
         "FROM validation_jobs WHERE id = %s",
         (job_id,),
     ).fetchone()
+
+
+async def test_session_secret_is_scoped_to_owning_org(db_session, conn, monkeypatch):
+    # A secret registered for another org under the same ref must not be readable.
+    monkeypatch.setenv("QA_SESSION_OTHERORG_SHOP", json.dumps({"Cookie": "sid=OTHER"}))
+    _, job_id = await queued_job(
+        db_session, conn, session_secret_ref="shop", test_context_id="synthetic-1"
+    )
+    model = ScriptedModel([intake("needs_info")])
+    await asyncio.to_thread(runner.execute_job, job_id, model=model)
+    job = await job_row(db_session, job_id)
+    assert (job.status, job.backend_error_code) == ("failed", "SESSION_SECRET_MISSING")
+    assert model.calls == []
+
+
+def test_session_secret_ref_pattern():
+    with pytest.raises(runner.JobInputError):
+        runner.session_secret_env_name("a" * 32, "../etc")

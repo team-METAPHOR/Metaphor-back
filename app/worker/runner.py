@@ -34,6 +34,9 @@ from app.worker.resets import RESETS
 
 logger = logging.getLogger(__name__)
 MONITOR_INTERVAL = 1.0
+# Files a resume/retest needs from the source engine job (spec §5.4: scenario + result + input).
+BASELINE_FILES = ("request.json", "scenario.json", "result.json")
+RESUME_FILES = ("request.json", "result.json")
 AUTH_MAX_AGE = 10.0
 
 
@@ -248,10 +251,14 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
     snapshot = job["scope_snapshot"]
     if snapshot["reset_adapter"] not in RESETS:
         raise JobInputError("RESET_ADAPTER_UNKNOWN")
-    if job["kind"] in ("resume", "retest") and not data["source_engine_id"]:
-        raise JobInputError("BASELINE_ARTIFACTS_MISSING")
-    reset = RESETS[snapshot["reset_adapter"]](snapshot)
     root = storage.safe_path(report["org_id"], report["id"])
+    if job["kind"] in ("resume", "retest"):
+        source = data["source_engine_id"]
+        needed = BASELINE_FILES if job["kind"] == "retest" else RESUME_FILES
+        if not source or not all((root / source / name).is_file() for name in needed):
+            # e.g. a worker without the shared volume, or files removed by retention.
+            raise JobInputError("BASELINE_ARTIFACTS_MISSING")
+    reset = RESETS[snapshot["reset_adapter"]](snapshot)
     monitor = Monitor(job_id, program["id"], job["scope_revision"])
 
     def bind(engine_job_id: str) -> None:

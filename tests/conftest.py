@@ -69,3 +69,23 @@ async def client(session_factory, tmp_path, monkeypatch) -> AsyncIterator[AsyncC
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:
         yield http
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def conn(engine):
+    """Autocommit sync connection, as the worker uses."""
+    with psycopg.connect(TEST_DATABASE_URL.replace("+psycopg", ""), autocommit=True) as connection:
+        yield connection
+
+
+@pytest.fixture
+def worker_env(tmp_path, monkeypatch):
+    """Point the worker (sync psycopg, storage) at the test DB and a temp storage root."""
+    from app.core.config import get_settings
+    from app.worker import runner
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    monkeypatch.setattr(settings, "database_url", TEST_DATABASE_URL)
+    monkeypatch.setattr(runner, "MONITOR_INTERVAL", 0.05)
+    return settings

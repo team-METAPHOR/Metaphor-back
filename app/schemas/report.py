@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.schemas.validation_job import JobBrief
 
@@ -52,3 +53,22 @@ class ClarificationCreate(BaseModel):
 class JobQueued(BaseModel):
     validation_job_id: str
     status: str
+
+
+class JobRequest(BaseModel):
+    """fresh: re-analyse from the stored report. retest: replay the baseline's stored plan
+    against an approved build. Expectations/steps/selectors are never accepted here."""
+
+    model_config = {"extra": "forbid"}
+
+    mode: Literal["fresh", "retest"]
+    baseline_job_id: str | None = None
+    app_version: str | None = None
+
+    @model_validator(mode="after")
+    def _retest_fields(self):
+        if self.mode == "retest" and not (self.baseline_job_id and self.app_version):
+            raise ValueError("retest requires baseline_job_id and app_version")
+        if self.mode == "fresh" and (self.baseline_job_id or self.app_version):
+            raise ValueError("fresh takes no baseline_job_id or app_version")
+        return self

@@ -7,7 +7,6 @@ import psycopg
 import pytest
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.models import Artifact, JobEvent, ModelUsage, QaResult, ValidationJob
 from app.services.intake import ReportSubmission, prepare_screenshot
 from app.services.reports import create_report
@@ -21,18 +20,8 @@ SYNC_URL = TEST_DATABASE_URL.replace("+psycopg", "")
 
 
 @pytest.fixture(autouse=True)
-def settings(tmp_path, monkeypatch):
-    s = get_settings()
-    monkeypatch.setattr(s, "storage_root", tmp_path / "storage")
-    monkeypatch.setattr(s, "database_url", TEST_DATABASE_URL)
-    monkeypatch.setattr(runner, "MONITOR_INTERVAL", 0.05)
-    return s
-
-
-@pytest.fixture
-def conn():
-    with psycopg.connect(SYNC_URL, autocommit=True) as connection:
-        yield connection
+def _worker(worker_env):
+    return worker_env
 
 
 async def queued_job(db_session, conn, *, screenshot=True, **revision):

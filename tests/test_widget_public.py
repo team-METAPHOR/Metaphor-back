@@ -192,6 +192,14 @@ async def test_sensitive_query_stripped_and_flagged(client, db_session, world):
     assert "s3cret" not in json.dumps(report.client_context)
 
 
+async def test_reported_url_path_pii_redacted(client, db_session, world):
+    page = f"{LIVE}/search/010-1234-5678"
+    response = await post(client, world["key"], payload(page_url=page), origin=LIVE)
+    assert response.status_code == 201, response.text
+    [report] = await reports(db_session)
+    assert report.client_context["reported_url"] == f"{LIVE}/search/[REDACTED_PHONE]"
+
+
 async def test_live_path_outside_scope_422(client, world):
     response = await post(client, world["key"], payload(page_url=f"{LIVE}/admin"), origin=LIVE)
     assert response.status_code == 422

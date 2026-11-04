@@ -1,6 +1,6 @@
 import logging
 
-from core_engine.redaction import redact_text
+from app.core.text import redact
 
 _FORMATTER = logging.Formatter()
 _LOGGERS = ("", "uvicorn", "uvicorn.error", "uvicorn.access", "sqlalchemy.engine")
@@ -10,12 +10,12 @@ class RedactingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         # Exception messages can carry secrets: render the traceback once, redacted.
         if record.exc_info:
-            record.exc_text = redact_text(_FORMATTER.formatException(record.exc_info))
+            record.exc_text = redact(_FORMATTER.formatException(record.exc_info))
             record.exc_info = None
         elif record.exc_text:
-            record.exc_text = redact_text(record.exc_text)
+            record.exc_text = redact(record.exc_text)
         if record.stack_info:
-            record.stack_info = redact_text(record.stack_info)
+            record.stack_info = redact(record.stack_info)
         args = record.args
         if record.name == "uvicorn.access" and isinstance(args, tuple) and len(args) == 5:
             # uvicorn's AccessFormatter unpacks (client, method, full_path, http_version,
@@ -23,12 +23,12 @@ class RedactingFilter(logging.Filter):
             client, method, path, version, status = args
             path = str(path).split("?", 1)[0]
             record.args = tuple(
-                redact_text(a) if isinstance(a, str) else a
+                redact(a) if isinstance(a, str) else a
                 for a in (client, method, path, version, status)
             )
-            record.msg = redact_text(str(record.msg))
+            record.msg = redact(str(record.msg))
             return True
-        record.msg = redact_text(record.getMessage())
+        record.msg = redact(record.getMessage())
         record.args = ()
         return True
 

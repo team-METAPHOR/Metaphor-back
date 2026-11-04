@@ -105,6 +105,7 @@ class WidgetConfig(BaseModel):
     screenshot_allowed: bool
     auto_detect: AutoDetect
     limits: WidgetLimits
+    mask_selectors: list[str]
 
 
 class WidgetReceipt(BaseModel):

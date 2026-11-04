@@ -247,6 +247,7 @@ async def test_config_screenshot_allowed_per_origin(client, world):
             "http_5xx": True,
         },
         "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20},
+        "mask_selectors": BUILTIN_MASKS,
     }
     assert staging.headers["Cache-Control"] == "public, max-age=60"
     assert "Origin" in staging.headers["Vary"]
@@ -259,6 +260,28 @@ async def test_config_screenshot_allowed_per_origin(client, world):
     assert live.json()["screenshot_allowed"] is True
     evil = await client.get(url, headers={"Origin": "https://evil.example"})
     assert evil.status_code == 403
+
+
+BUILTIN_MASKS = [
+    "[data-private]",
+    "[data-sensitive]",
+    "input[type=password]",
+    "input[type=hidden]",
+    "iframe",
+]
+
+
+async def test_config_mask_selectors_follow_current_revision(client, world):
+    url = f"/api/v1/widget/config?project_key={world['key']}"
+    response = await client.patch(
+        f"/api/v1/programs/{world['program'].id}",
+        json={"mask_selectors": ["#card-number", "iframe", ".ssn", "#card-number"]},
+        headers=world["admin_h"],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["current_revision"] == 2
+    config = await client.get(url, headers={"Origin": LIVE})
+    assert config.json()["mask_selectors"] == [*BUILTIN_MASKS, "#card-number", ".ssn"]
 
 
 # (6)

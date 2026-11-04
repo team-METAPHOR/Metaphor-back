@@ -70,6 +70,19 @@ uv run uvicorn app.main:app --reload
 - 상태 응답: `{"status":"ok"}`. 프로세스 확인용이며 DB·큐·워커 연결 상태를 의미하지 않습니다.
 - `main.py`는 `uvicorn main:app` 실행을 위한 호환 진입점입니다.
 
+### 환경 변수 (API)
+
+- `IP_HASH_SECRET`: 위젯 신고자 IP를 HMAC-SHA256으로 해시할 때 쓰는 키입니다. 원본 IP는 저장하지 않습니다. 비어 있으면 위젯 신고 API가 503 `WIDGET_UNAVAILABLE`을 반환합니다. 환경마다 긴 무작위 값을 넣으세요.
+- 프록시·로드밸런서 뒤에서는 `uvicorn --proxy-headers --forwarded-allow-ips=<LB IP>`로 실행해야 IP별 신고 한도가 실제 클라이언트 기준으로 동작합니다.
+
+### 보존 기간 정리
+
+```bash
+uv run python -m app.worker.purge   # 하루 1회 cron / k8s CronJob
+```
+
+만료된 근거 파일과 행, artifact 행이 없는 1일 이상 된 고아 파일, 1일 이상 된 빈 디렉터리, 만료된 멱등성 기록을 지웁니다. 여러 번 실행해도 안전합니다.
+
 ### 로컬 DB
 
 DB를 사용하는 기능 개발 시 Docker Compose로 개발용 DB를 실행할 수 있습니다.

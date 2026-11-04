@@ -75,15 +75,40 @@ async def test_invalid_scope_rejected_422(client, world):
     "overrides",
     [
         {"width": 100},
-        {"mask_selectors": ["#x"] * 31},
-        {"mask_selectors": ["x" * 257]},
-        {"mask_selectors": [""]},
     ],
 )
 async def test_invalid_run_options_422(client, world, overrides):
     response = await create(client, world, **overrides)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_RUN_OPTIONS"
+
+
+# Schema mirrors the engine's BrowserOptions limits (core_engine/observation.py).
+BAD_MASK_SELECTORS = [["#x"] * 31, ["x" * 257], [""]]
+
+
+@pytest.mark.parametrize("selectors", BAD_MASK_SELECTORS)
+async def test_create_mask_selectors_capped_422(client, world, selectors):
+    response = await create(client, world, mask_selectors=selectors)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.parametrize("selectors", BAD_MASK_SELECTORS)
+async def test_patch_mask_selectors_capped_422(client, world, selectors):
+    program = await created(client, world)
+    response = await client.patch(
+        f"/api/v1/programs/{program['id']}",
+        json={"mask_selectors": selectors},
+        headers=world["admin"],
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+async def test_mask_selectors_at_limit_accepted(client, world):
+    program = await created(client, world, mask_selectors=["x" * 256] * 30)
+    assert len(program["scope"]["mask_selectors"]) == 30
 
 
 @pytest.mark.parametrize(

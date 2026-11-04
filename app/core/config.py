@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,15 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://metaphor:metaphor@localhost:5432/metaphor",
         repr=False,
     )
+    # Private evidence volume. Engine job stores live under {storage_root}/{org}/{report}/.
+    storage_root: Path = Path("var/storage")
+    # Exact origins of the Metaphor platform frontend (CSRF check for cookie sessions).
+    allowed_origins: list[str] = ["http://localhost:3000"]
+    # HMAC key for widget client IPs (raw IPs are never stored). Unset → widget reports 503.
+    ip_hash_secret: str = Field(default="", repr=False)
+    lease_seconds: int = 30
+    # Engine QA limit (180s) plus cleanup headroom.
+    worker_hard_deadline_seconds: int = 210
 
 
 @lru_cache

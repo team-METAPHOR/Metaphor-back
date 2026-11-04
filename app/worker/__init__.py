@@ -1,1 +1,1 @@
-"""Reserved for a separate validation worker process; no execution implemented yet."""
+"""Validation worker: claims jobs from PostgreSQL and supervises one engine child per job."""

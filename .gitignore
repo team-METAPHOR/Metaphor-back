@@ -24,3 +24,6 @@ htmlcov/
 *.log
 *.db
 artifacts/
+
+# Private evidence storage
+var/

@@ -131,3 +131,18 @@ def test_sanitize_text_checks_raw_length_then_redacts():
     with pytest.raises(ApiError) as exc:
         sanitize_text(long_secret, 20)
     assert (exc.value.status, exc.value.code) == (422, "TEXT_TOO_LONG")
+
+
+def test_exception_traceback_is_redacted():
+    try:
+        raise RuntimeError("leak sk-abcdefgh12345")
+    except RuntimeError:
+        import sys
+
+        record = logging.LogRecord("app.x", logging.ERROR, __file__, 1, "boom", (), sys.exc_info())
+    record.stack_info = "stack Bearer abc.def.ghi"
+    RedactingFilter().filter(record)
+    text = logging.Formatter().format(record)
+    assert "RuntimeError" in text
+    assert "sk-abcdefgh12345" not in text
+    assert "abc.def.ghi" not in text

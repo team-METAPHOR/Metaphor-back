@@ -11,7 +11,7 @@ from app.schemas.report import JobRequest
 from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
-from app.services.jobs import create_job
+from app.services.jobs import create_job, enforce_job_request_limit
 from app.services.reports import load_visible_report
 
 RERUN_ROLES = ("reviewer", "admin")
@@ -61,6 +61,7 @@ async def request_job(
             raise ApiError(403, "FORBIDDEN", "재실행 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
+            await enforce_job_request_limit(db, user_id)
             program = await db.get(Program, report.program_id)
             if program.status != "active" or not program.external_ai_allowed:
                 raise ApiError(

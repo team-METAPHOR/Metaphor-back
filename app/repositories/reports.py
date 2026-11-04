@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Membership, Organization, Report, ValidationJob
@@ -8,6 +8,14 @@ from app.models import Membership, Organization, Report, ValidationJob
 
 async def get(db: AsyncSession, report_id: str) -> Report | None:
     return await db.get(Report, report_id)
+
+
+def count_by_author(author_id: str, since: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(Report)
+        .where(Report.author_id == author_id, Report.created_at >= since)
+    )
 
 
 def member_org_ids(user_id: str):

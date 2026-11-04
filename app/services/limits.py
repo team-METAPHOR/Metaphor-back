@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
@@ -25,3 +25,8 @@ async def enforce_rate_limit(
     """
     if (await session.scalar(count_stmt) or 0) >= limit:
         raise ApiError(429, code, message)
+
+
+async def lock_key(session: AsyncSession, key: str) -> None:
+    """Transaction-scoped advisory lock so a count-then-insert on `key` is atomic."""
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))

@@ -170,6 +170,27 @@ async def test_handoff_unavailable_for_failed_job_without_result(client, db_sess
     assert body["state"] == "unavailable" and body["solutions"] == []
 
 
+async def test_handoff_expired_after_scrub(client, db_session, world):
+    await finish(db_session, world)
+    # The purge deletes the raw result and marks the report scrubbed.
+    await db_session.execute(QaResult.__table__.delete().where(QaResult.job_id == world["job_id"]))
+    await db_session.execute(
+        update(Report)
+        .where(Report.id == world["report"].id)
+        .values(description="", scrubbed_at=datetime.now(UTC))
+    )
+    await db_session.commit()
+    response = await client.get(handoff_url(world), headers=world["dev"])
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["state"], body["job_id"], body["verdict"]) == (
+        "expired",
+        world["job_id"],
+        "reproduced",
+    )
+    assert body["summary"] is None and body["solutions"] == []
+
+
 async def test_handoff_reporter_403_stranger_404(client, db_session, world):
     await finish(db_session, world)
     reporter = await client.get(handoff_url(world), headers=world["reporter"])

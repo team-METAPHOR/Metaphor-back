@@ -66,6 +66,9 @@ async def developer_handoff(db: AsyncSession, user_id: str, report_id: str) -> D
         job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
         if job is None or job.status in ACTIVE:
             return _empty("pending", job)
+        if report.scrubbed_at is not None:
+            # The retention purge deleted the raw result; say so instead of "unavailable".
+            return _empty("expired", job)
         result = await jobs_repo.get_result(db, job.id)
     analysis = ((result.raw if result else {}).get("report") or {}).get("analysis")
     if not analysis:

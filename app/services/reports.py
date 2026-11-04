@@ -264,4 +264,5 @@ async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDe
         has_screenshot=report.input_artifact_id is not None,
         input_artifact_id=report.input_artifact_id,
         client_context=report.client_context if access == "org" else None,
+        scrubbed=report.scrubbed_at is not None,
     )

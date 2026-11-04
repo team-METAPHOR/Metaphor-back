@@ -436,14 +436,51 @@ async def test_project_rate_limit_429(client, db_session, world):
 
 
 async def test_widget_respects_daily_job_limit_429(client, db_session, world):
+    # Widget cap is 2 of 4; three platform jobs leave one slot of the day's budget.
     await db_session.execute(
-        update(Program).where(Program.id == world["program"].id).values(daily_job_limit=1)
+        update(Program).where(Program.id == world["program"].id).values(daily_job_limit=4)
     )
     await db_session.commit()
+    _, reporter_h = await login_as(client, db_session, world["org"], "developer")
+    for i in range(3):
+        response = await client.post(
+            "/api/v1/reports",
+            data={
+                "program_id": world["program"].id,
+                "target_url": f"{STAGING}/search?q={i}",
+                "description": "bug",
+            },
+            headers=reporter_h,
+        )
+        assert response.status_code == 201, response.text
     assert (await post(client, world["key"], payload())).status_code == 201
     response = await post(client, world["key"], payload(title="second"))
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "DAILY_LIMIT_EXCEEDED"
+
+
+async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session, world):
+    await db_session.execute(
+        update(Program).where(Program.id == world["program"].id).values(daily_job_limit=5)
+    )
+    await db_session.commit()
+    for i in range(2):  # max(1, 5 // 2) == 2
+        assert (await post(client, world["key"], payload(title=f"t{i}"))).status_code == 201
+    response = await post(client, world["key"], payload(title="third"))
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "WIDGET_DAILY_LIMITED"
+    # The customer's own platform reruns still have budget left.
+    _, reporter_h = await login_as(client, db_session, world["org"], "developer")
+    platform = await client.post(
+        "/api/v1/reports",
+        data={
+            "program_id": world["program"].id,
+            "target_url": f"{STAGING}/search?q=x",
+            "description": "b",
+        },
+        headers=reporter_h,
+    )
+    assert platform.status_code == 201, platform.text
 
 
 # extras

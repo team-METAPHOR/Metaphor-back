@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError
@@ -48,6 +48,11 @@ BUILTIN_MASK_SELECTORS = (
     "input[type=hidden]",
     "iframe",
 )
+
+
+def widget_daily_limit(program: Program) -> int:
+    """Anonymous reports may use at most half of the program's daily job budget."""
+    return max(1, program.daily_job_limit // 2)
 
 
 def config_limits() -> dict:
@@ -289,6 +294,14 @@ async def submit_report(
                 repo.count_since(program.id, window),
                 limit=PROJECT_HOURLY_LIMIT,
                 code="WIDGET_PROJECT_RATE_LIMITED",
+            )
+            day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            await enforce_rate_limit(
+                db,
+                repo.count_since(program.id, day_start),
+                limit=widget_daily_limit(program),
+                code="WIDGET_DAILY_LIMITED",
+                message="오늘 받을 수 있는 위젯 신고 수를 초과했습니다.",
             )
             fp = None
             if body.error_type != "manual":

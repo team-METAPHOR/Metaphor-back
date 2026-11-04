@@ -1,5 +1,6 @@
 """Shared intake checks for platform and widget reports (upload, masking, scope)."""
 
+import json
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
@@ -105,3 +106,16 @@ def check_target_url(revision: ProgramScopeRevision, url: str) -> tuple[str, boo
         return policy.check_url(urlunsplit((*parts[:3], "", ""))), True
     except PolicyError as error:
         raise _scope_error(error.code) from None
+
+
+def parse_mask_boxes(value: str | None) -> list | None:
+    """`mask_boxes` form field: JSON `[[x1, y1, x2, y2], ...]` in image pixels."""
+    if value is None or not value.strip():
+        return None
+    try:
+        boxes = json.loads(value)
+    except ValueError:
+        raise ApiError(422, "MASK_BOX_INVALID", "마스킹 영역 형식이 올바르지 않습니다.") from None
+    if not isinstance(boxes, list):
+        raise ApiError(422, "MASK_BOX_INVALID", "마스킹 영역 형식이 올바르지 않습니다.")
+    return boxes

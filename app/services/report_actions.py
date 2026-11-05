@@ -1,7 +1,7 @@
 """What a person must do before a report can move on (`required_actions`), and a plain-text
 summary of the latest engine attempt (`best_attempt`).
 
-Only codes the engine (core_engine f2d5227) or our worker actually emit are mapped; anything
+Only codes the engine (core_engine 3be4d9f) or our worker actually emit are mapped; anything
 else yields no action rather than a guess.
 """
 

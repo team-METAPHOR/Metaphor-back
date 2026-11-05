@@ -196,7 +196,7 @@ review the generated file → `uv run alembic upgrade head`. Never create tables
 - Prefer the smallest change that satisfies the task. Reuse shared services (`create_report`,
   `create_job`, `run_once`, `enforce_rate_limit`, `record_audit`) instead of re-implementing.
 - No new dependency without a reason stated in the PR. Stdlib first.
-- Do not modify the engine (`metaphor-core-engine`, pinned at `48ec7bb`), Playwright behavior,
+- Do not modify the engine (`metaphor-core-engine`, pinned at `9e8e5c2`), Playwright behavior,
   or model prompts from this repo.
 - Error responses use the shared envelope:
   `{"error": {"code": "UPPER_SNAKE", "message": "...", "request_id": "..."}}`.

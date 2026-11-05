@@ -83,8 +83,45 @@ class ReportItem(BaseModel):
 
 
 class ReportList(BaseModel):
+    """Cursor mode (`cursor` given): `total`/`page` are null. Otherwise page mode: `page` is
+    the 1-based page and `total` the number of matching reports. `next_cursor` is always set
+    when more rows follow, so a page-mode client can also continue with the cursor."""
+
     items: list[ReportItem]
     next_cursor: str | None
+    total: int | None = None
+    page: int | None = None
+
+
+class AttentionItem(BaseModel):
+    id: str
+    number: int
+    title: str
+    progress: Progress
+
+
+class ReportSummary(BaseModel):
+    """All of the org's reports (closed included), counted by `progress`; every value is
+    present, zero when none. `needs_attention`: newest 5 reports that are reproduced or whose
+    latest job waits for an answer (needs_info) while still `received`."""
+
+    counts: dict[str, int]
+    needs_attention: list[AttentionItem]
+
+
+class PageCount(BaseModel):
+    path: str
+    count: int
+
+
+class ReportStats(BaseModel):
+    """Over jobs/reports created in the last `days` days (1..90)."""
+
+    days: int
+    auto_reproduction_rate: float | None
+    avg_reproduction_seconds: float | None
+    fix_verified_count: int
+    by_page: list[PageCount]
 
 
 class ReportDetail(ReportItem):

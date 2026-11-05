@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # HMAC key (>= 32 bytes) for login emails and client IPs; see app/core/hashing.py.
     # Required unless DEBUG=true (then empty means the public dev-only key).
     ip_hash_secret: str = Field(default="", repr=False)
+    # Widget reports per client IP per hour (abuse guard). Raise for demos where one tester
+    # files many reports from the same network.
+    widget_ip_hourly_limit: int = Field(default=10, ge=1, le=10_000)
     # Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is trusted for the client IP.
     trusted_proxies: list[str] = []
     # RSA (>= 3072) public key PEM that seals program test accounts. Not secret: only the

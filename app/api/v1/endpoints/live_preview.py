@@ -1,6 +1,8 @@
 """`WS /api/v1/validation-jobs/{job_id}/live`: masked live preview of a running job.
 
 Observation only: client messages are ignored. Protocol: docs/api/live-preview.md.
+`POST .../live-ticket` issues the one-time ticket a direct `wss://` connection (no cookie on
+the API host) offers in Sec-WebSocket-Protocol. Never log tickets or put them in URLs.
 """
 
 import asyncio
@@ -9,13 +11,15 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect
 
-from app.api.dependencies import SESSION_COOKIE, DbSession
+from app.api.dependencies import SESSION_COOKIE, CurrentUser, DbSession, require_csrf
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.integrations import live_notify
+from app.schemas.live_preview import LiveTicketOut
 from app.services import live_preview as service
+from app.services.auth import token_hash
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/validation-jobs", tags=["validation-jobs"])
@@ -26,7 +30,7 @@ RECHECK_SECONDS = 10.0
 SEND_TIMEOUT_SECONDS = 5.0
 
 # Application close codes (4000-4999). 1000 = job ended normally.
-CLOSE_CODES = {401: 4401, 404: 4404}
+CLOSE_CODES = {401: 4401, 404: 4404}  # 401 reason: UNAUTHENTICATED or TICKET_INVALID
 CLOSE_TOO_MANY = 4429
 CLOSE_SLOW = 4408
 
@@ -88,16 +92,63 @@ class _Viewer:
             self.cursor = sequence
 
 
+def _websocket_url(job_id: str) -> str | None:
+    base = get_settings().public_api_base
+    if not base:
+        return None
+    scheme, sep, rest = base.partition("://")
+    ws_scheme = {"https": "wss", "http": "ws"}.get(scheme.lower(), scheme)
+    return f"{ws_scheme}{sep}{rest}/api/v1/validation-jobs/{job_id}/live"
+
+
+@router.post(
+    "/{job_id}/live-ticket",
+    response_model=LiveTicketOut,
+    dependencies=[Depends(require_csrf)],
+)
+async def issue_live_ticket(
+    job_id: str, request: Request, response: Response, user: CurrentUser, db: DbSession
+):
+    """One-time (30 s) ticket for `WS .../live`, for any active member of the job's org."""
+    session_id = token_hash(request.cookies[SESSION_COOKIE])  # CurrentUser checked it
+    grant = await service.issue_ticket(db, user.id, session_id, job_id)
+    response.headers["Cache-Control"] = "no-store"
+    return LiveTicketOut(
+        websocket_url=_websocket_url(job_id),
+        ticket=grant.ticket,
+        expires_at=grant.expires_at,
+        subprotocol=service.PROTOCOL,
+    )
+
+
+def _offered_ticket(websocket: WebSocket) -> tuple[bool, str | None]:
+    """(well_formed, ticket) from Sec-WebSocket-Protocol. A ticket needs PROTOCOL beside it."""
+    offered = websocket.scope.get("subprotocols") or []
+    prefix = service.TICKET_PREFIX
+    tickets = [p.removeprefix(prefix) for p in offered if p.startswith(prefix)]
+    if not tickets:
+        return True, None
+    return len(tickets) == 1 and service.PROTOCOL in offered, tickets[0]
+
+
 @router.websocket("/{job_id}/live")
 async def live_preview(websocket: WebSocket, job_id: str, db: DbSession):
     # Cross-site WebSocket hijacking guard: browsers always send Origin on WebSockets.
-    if websocket.headers.get("origin") not in get_settings().allowed_origins:
+    well_formed, ticket = _offered_ticket(websocket)
+    origin_ok = websocket.headers.get("origin") in get_settings().allowed_origins
+    if not origin_ok or not well_formed:
         await websocket.close(code=1008)  # before accept → handshake rejected (HTTP 403)
         return
-    token = websocket.cookies.get(SESSION_COOKIE)
-    await websocket.accept()
+    offered = websocket.scope.get("subprotocols") or []
+    # Select only the fixed protocol (if offered): the ticket is never echoed back.
+    await websocket.accept(subprotocol=service.PROTOCOL if service.PROTOCOL in offered else None)
     try:
-        access = await service.authorize(db, token, job_id)
+        if ticket is not None:
+            binding = await service.consume_ticket(db, ticket, job_id)
+            access = await service.authorize(db, binding.session_id, job_id, binding)
+        else:
+            token = websocket.cookies.get(SESSION_COOKIE)
+            access = await service.authorize(db, token_hash(token) if token else None, job_id)
     except ApiError as error:
         await websocket.close(code=CLOSE_CODES.get(error.status, 4404), reason=error.code)
         return
@@ -109,7 +160,7 @@ async def live_preview(websocket: WebSocket, job_id: str, db: DbSession):
     notifier.subscribe(access.job_id, wake)
     receiver = asyncio.create_task(_drain_client(websocket))
     try:
-        await _serve(websocket, db, token, _Viewer(websocket, access), wake, receiver)
+        await _serve(websocket, db, _Viewer(websocket, access), wake, receiver)
     except (WebSocketDisconnect, RuntimeError, TimeoutError):
         pass  # client went away or stopped reading mid-send
     finally:
@@ -127,7 +178,7 @@ async def _drain_client(websocket: WebSocket) -> None:
             return
 
 
-async def _serve(websocket, db, token, viewer: _Viewer, wake, receiver) -> None:
+async def _serve(websocket, db, viewer: _Viewer, wake, receiver) -> None:
     access = viewer.access
     checked = beat = time.monotonic()
     while True:
@@ -145,7 +196,7 @@ async def _serve(websocket, db, token, viewer: _Viewer, wake, receiver) -> None:
         if now - checked >= RECHECK_SECONDS:
             checked = now
             try:  # session revoked, membership removed, org deactivated → close at once
-                await service.authorize(db, token, access.job_id)
+                await service.authorize(db, access.session_id, access.job_id)
             except ApiError as error:
                 await websocket.close(code=CLOSE_CODES.get(error.status, 4404), reason=error.code)
                 return

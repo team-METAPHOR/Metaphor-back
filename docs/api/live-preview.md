@@ -16,22 +16,85 @@
 GET wss://<API>/api/v1/validation-jobs/{job_id}/live   (WebSocket upgrade)
 ```
 
-- **인증**: 기존 로그인 세션 쿠키 `sid`. URL에 토큰을 넣지 않습니다.
-- **Origin**: `ALLOWED_ORIGINS`에 있는 origin만 허용합니다. 없거나 다르면 handshake를 거부합니다(HTTP 403, close 1008).
-- **권한**: 신고 소유 조직의 활성 멤버(모든 역할, `viewer` 포함). 다른 조직의 작업, 없는 작업, 엔진 job ID 대입은 모두 같은 `4404`로 닫습니다.
-- 연결 중 10초마다 세션과 멤버십을 다시 확인합니다. 로그아웃·세션 만료면 `4401`, 멤버십 해제·조직 비활성화면 `4404`로 바로 닫습니다.
+인증 방법은 두 가지입니다. URL·query에는 어떤 비밀값도 넣지 않습니다.
+
+| 방법 | 언제 | 전달 |
+|---|---|---|
+| **일회용 티켓** (권장, 배포) | 대시보드가 API 호스트에 직접 연결할 때. 대시보드 host-only `sid` 쿠키는 API 호스트로 가지 않습니다. | `Sec-WebSocket-Protocol: metaphor-live.v1, ticket.<ticket>` |
+| `sid` 쿠키 | 같은 origin(로컬 Next rewrite 등)에서 쿠키가 그대로 전달될 때 | 쿠키 |
+
+둘 다 보내면 티켓을 씁니다.
+
+### 1) 티켓 발급 (REST, 기존 세션 프록시 경유)
+
+```
+POST /api/v1/validation-jobs/{job_id}/live-ticket
+Cookie: sid=…            (기존 대시보드 세션)
+Origin: <ALLOWED_ORIGINS 중 하나>   (CSRF 가드, 없으면 403 CSRF_REJECTED)
+```
+
+```json
+200 OK
+Cache-Control: no-store
+
+{"websocket_url": "wss://api.example.com/api/v1/validation-jobs/<job_id>/live",
+ "ticket": "<43자 base64url>",
+ "expires_at": "2026-11-06T12:00:30+00:00",
+ "subprotocol": "metaphor-live.v1"}
+```
+
+- **권한**: 작업 조회 권한과 같습니다. 신고 소유 조직의 활성 멤버(모든 역할, `viewer` 포함). 다른 조직의 작업이나 없는 작업은 똑같이 `404 NOT_FOUND`입니다. 로그인하지 않았으면 `401 UNAUTHENTICATED`입니다.
+- **수명**: 30초, 한 번만 쓸 수 있습니다. 발급한 사용자·세션·조직·작업에 묶입니다. 서버에는 SHA-256 해시만 저장합니다.
+- **속도 제한**: 사용자당 1분에 30개. 넘으면 `429 LIVE_TICKET_THROTTLED`입니다.
+- **`websocket_url`**: `PUBLIC_API_BASE`(API 환경변수)로 만듭니다(`https://` → `wss://`, 로컬 `http://` → `ws://`). 설정되지 않았으면 `null`이고, 이때는 대시보드와 같은 origin의 `/api/v1/validation-jobs/{job_id}/live`로 연결합니다(로컬 rewrite). 운영에서는 유효한 TLS의 `https://` API 주소를 넣어야 합니다.
+- 티켓은 로그, 분석 이벤트, 오류 보고, URL, `localStorage`에 남기지 마세요. 받자마자 연결에 쓰고 버립니다.
+
+### 2) 연결
+
+```js
+const t = await fetch(`/api/v1/validation-jobs/${jobId}/live-ticket`, {
+  method: "POST", credentials: "include",
+}).then((r) => r.json());
+const url = t.websocket_url ?? `${location.origin.replace(/^http/, "ws")}/api/v1/validation-jobs/${jobId}/live`;
+const ws = new WebSocket(url, [t.subprotocol, `ticket.${t.ticket}`]);
+ws.binaryType = "arraybuffer";
+```
+
+- 서버는 `metaphor-live.v1`만 선택해 응답합니다(`ws.protocol === "metaphor-live.v1"`). 티켓은 응답에 다시 싣지 않습니다.
+- 티켓을 보낼 때는 `metaphor-live.v1`을 함께 보내야 하고 티켓은 하나만 보낼 수 있습니다. 어기면 handshake를 거부합니다(HTTP 403, `1008`).
+- 티켓은 handshake에서 원자적으로 한 번만 소비됩니다. 같은 티켓으로 동시에 여러 번 연결해도 하나만 성공합니다. 다른 작업 경로에 낸 티켓도 소비된 뒤 `4404`로 닫힙니다.
+- 쿠키로 연결할 때도 `metaphor-live.v1`을 보내도 됩니다(선택). 보내면 그대로 선택됩니다.
+
+### 공통 규칙
+
+- **Origin**: `ALLOWED_ORIGINS`에 있는 origin만 허용합니다. 없거나 다르면 handshake를 거부합니다(HTTP 403, close 1008). 티켓이 있어도 같습니다.
+- **권한**: 신고 소유 조직의 활성 멤버(모든 역할). 다른 조직의 작업, 없는 작업, 엔진 job ID 대입은 모두 같은 `4404`로 닫습니다.
+- 연결 중 10초마다 세션과 멤버십을 다시 확인합니다. 티켓으로 연결했어도 티켓을 발급한 **세션**을 계속 확인합니다. 로그아웃·비밀번호 변경·세션 만료면 `4401 UNAUTHENTICATED`, 멤버십 해제·조직 비활성화면 `4404`로 바로 닫습니다. 세션이 지워지면 그 세션의 미사용 티켓도 함께 지워집니다.
 - 사용자당 동시 연결은 API 프로세스마다 4개까지입니다(`4429`).
 - 클라이언트가 보내는 메시지는 무시합니다.
 
 | close code | reason | 의미 / 프론트 처리 |
 |---|---|---|
 | `1000` | `JOB_ENDED` | 작업 종료. 재접속하지 말고 결과 API로 전환 |
-| `1008` | — | Origin 거부(handshake 단계). 재접속하지 않음 |
-| `4401` | `UNAUTHENTICATED` | 로그인 필요. 재접속하지 않음 |
+| `1008` | — | Origin 거부 또는 잘못된 subprotocol(handshake 단계). 재접속하지 않음 |
+| `4401` | `TICKET_INVALID` | 티켓이 없거나 만료·재사용·세션 철회됨. **새 티켓을 한 번** 받아 재접속. 발급이 `401`이면 로그인 화면 |
+| `4401` | `UNAUTHENTICATED` | 세션이 없음/만료/철회됨. 재접속하지 말고 로그인 화면 |
 | `4404` | `NOT_FOUND` | 접근 불가(권한 철회 포함). 화면을 지우고 재접속하지 않음 |
-| `4429` | `TOO_MANY_CONNECTIONS` | 다른 탭을 닫거나 잠시 뒤 재시도 |
-| `4408` | `SLOW_CONSUMER` | 5초 안에 전송을 받지 못함. backoff 후 재접속 |
-| 그 외(1006 등) | — | 네트워크 단절. 제한된 backoff로 재접속 |
+| `4429` | `TOO_MANY_CONNECTIONS` | 다른 탭을 닫거나 잠시 뒤 재시도(새 티켓) |
+| `4408` | `SLOW_CONSUMER` | 5초 안에 전송을 받지 못함. backoff 후 새 티켓으로 재접속 |
+| 그 외(1006 등) | — | 네트워크 단절. 제한된 backoff로 새 티켓을 받아 재접속 |
+
+**재접속 = 새 티켓.** 티켓은 한 번 쓰면 끝이므로 재접속할 때마다 `POST .../live-ticket`부터 다시 합니다. 발급 응답별 처리:
+
+| 발급 응답 | 프론트 처리 |
+|---|---|
+| `401 UNAUTHENTICATED` | 로그인 화면. 재접속 중단 |
+| `403 CSRF_REJECTED` | 설정 오류(대시보드 origin이 `ALLOWED_ORIGINS`에 없음). 재접속 중단 |
+| `404 NOT_FOUND` | 화면 지우기. 재접속 중단 |
+| `429 LIVE_TICKET_THROTTLED` | `Retry-After`가 없으므로 수십 초 backoff 후 재시도 |
+| 5xx / 네트워크 | 제한된 backoff로 재시도 |
+
+라이브 연결 실패는 QA 실행 실패가 아닙니다. 미리보기만 "전송 장애"로 표시하고 작업 상태는 기존 REST(`GET /validation-jobs/{id}`, `/events`)로 계속 보여 주세요.
 
 ## 메시지
 
@@ -98,6 +161,8 @@ GET wss://<API>/api/v1/validation-jobs/{job_id}/live   (WebSocket upgrade)
 
 - API와 워커가 서로 다른 호스트여도 같은 PostgreSQL만 쓰면 됩니다(`LISTEN/NOTIFY` + UNLOGGED 테이블). 브로커는 없습니다.
 - WebSocket은 `/api/*` 아래 경로라 Caddy(`reverse_proxy`)는 별도 설정 없이 upgrade를 전달합니다.
-- **Vercel rewrite는 WebSocket을 프록시하지 않습니다.** 그래서 대시보드가 API origin에 직접 연결해야 합니다. 이때 다음 조건이 필요합니다.
+- **대시보드(Vercel) → API 연결 경로.** 로컬 Next rewrite에서 WebSocket이 연결된 것만으로 실제 Vercel 배포의 외부 rewrite(`/api/*` → API 호스트) 경로에서 upgrade가 전달된다는 것은 **검증되지 않았습니다**. Vercel 자체는 Fluid Compute에서 네이티브 WebSocket을 지원하지만, 그 기능이 외부 API로 가는 rewrite를 자동으로 해결해 주지는 않습니다. 그래서 배포에서는 대시보드가 API 호스트에 **직접 `wss://`** 로 연결하고, 위의 일회용 티켓으로 인증합니다.
+  - 대시보드 host-only `sid` 쿠키는 API 호스트로 가지 않습니다. 티켓 발급은 기존처럼 대시보드의 REST 프록시(쿠키)로 하고, WebSocket만 API 호스트로 직접 붙습니다.
+  - API에 `PUBLIC_API_BASE=https://<API 호스트>`(유효한 TLS)를 설정해야 `websocket_url`이 채워집니다.
   - `ALLOWED_ORIGINS`에 대시보드 origin(`https://metaphor-front.vercel.app`)이 있어야 합니다. 이미 CSRF 용도로 등록되어 있습니다.
-  - `sid` 쿠키가 API 호스트로 전송되어야 합니다. 지금은 Vercel 프록시를 통해 대시보드 호스트에 host-only 쿠키로 설정되므로, API 호스트로 직접 연결하면 쿠키가 가지 않습니다. 대시보드와 API를 같은 사이트(예: `app.example.com`/`api.example.com`)에 두고 API가 직접 쿠키를 설정하거나, 짧은 수명의 1회용 연결 티켓(REST로 발급 → `Sec-WebSocket-Protocol`로 전달)을 추가하는 결정이 필요합니다.
+  - 실제 Vercel 배포에서 로그인 → 허가된 작업 연결 → 프레임 수신 → 재접속, 그리고 다른 조직·만료·재사용·취소 거부를 확인해야 이 경로가 검증됩니다(#107).

@@ -31,7 +31,7 @@ API 설정을 셸에서 `source`하지 않는다(`APP_NAME`의 공백과 JSON �
 | `ALLOWED_ORIGINS` | JSON 배열. `https://metaphor-front.vercel.app`, 필요 시 로컬 프론트 주소 추가 |
 | `IP_HASH_SECRET` | UTF-8 기준 32바이트 이상의 무작위 비밀 값. 운영에서는 누락 시 시작 실패. 기존 값을 유지 |
 | `TRUSTED_PROXIES` | 직접 접속이면 `[]`. 직접 운영하는 프록시의 IP/CIDR만 등록 |
-| `PUBLIC_API_BASE` | 설치 코드에 사용할 외부 API 주소. 데모: `https://api.13-197-7-82.sslip.io` |
+| `PUBLIC_API_BASE` | 설치 코드와 실시간 화면 `websocket_url`(`wss://`)에 사용할 외부 API 주소. 데모: `https://api.13-197-7-82.sslip.io` |
 | `TEST_ACCOUNT_PUBLIC_KEY` | 선택. 테스트 계정 암호화용 RSA 공개키 PEM |
 
 | 워커 `.env.worker` | 설명 |
@@ -151,6 +151,8 @@ Vercel 프로젝트 환경변수는 `API_ORIGIN=http://13.197.7.82:8000`이며 �
 이 주소는 Vercel 서버가 사용하는 upstream이어서 현재 구성에서도 브라우저 혼합 콘텐츠를
 일으키지 않는다. HTTPS upstream으로 옮길 때는 `https://api.13-197-7-82.sslip.io`를 사용한다.
 대시보드는 `/api/*`를 프록시한다. API의 `ALLOWED_ORIGINS`에도 대시보드 origin을 등록한다.
+실시간 화면 WebSocket은 이 rewrite 경로로 검증되지 않았으므로, 대시보드가 일회용 티켓을 받아
+`PUBLIC_API_BASE`의 `wss://` 주소로 직접 연결한다([live-preview.md](api/live-preview.md#연결)).
 
 1. 대시보드에서 로그인하고 회사를 만든다. 기존 회사·프로그램을 사용한다면 중복 생성하지 않는다.
 2. 프로그램 `spear`를 만들고 `https://dev.13-197-7-82.sslip.io`를 `base_url`로 등록한다.

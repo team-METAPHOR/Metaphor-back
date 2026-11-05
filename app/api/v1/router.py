@@ -21,7 +21,8 @@ api_router = APIRouter()
 api_router.include_router(health.router)
 # Public Web SDK API: no cookie auth, no CSRF guard (per-program Origin checks instead).
 api_router.include_router(widget.router)
-# WebSocket: checks Origin and the session cookie itself (require_csrf is HTTP-only).
+# WebSocket: checks Origin and the session cookie or one-time ticket itself (require_csrf is
+# HTTP-only; the POST live-ticket route declares it on the route).
 api_router.include_router(live_preview.router)
 
 # Cookie-auth routes. /widget/* mounts on api_router directly: no cookies, no CSRF guard.

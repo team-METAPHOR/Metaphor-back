@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Membership, Organization, Report, ValidationJob
+from app.models import Membership, Organization, Report, User, ValidationJob
 
 
 async def get(db: AsyncSession, report_id: str) -> Report | None:
@@ -34,11 +34,13 @@ async def list_visible(
     cursor: tuple[datetime, str] | None,
     source: str | None,
     program_id: str | None,
-) -> list[tuple[Report, ValidationJob | None]]:
-    """Reports of the user's active orgs, newest first."""
+    assignee_id: str | None = None,
+) -> list[tuple[Report, ValidationJob | None, User | None]]:
+    """Reports of the user's active orgs, newest first, with latest job and assignee."""
     query = (
-        select(Report, ValidationJob)
+        select(Report, ValidationJob, User)
         .outerjoin(ValidationJob, ValidationJob.id == Report.latest_job_id)
+        .outerjoin(User, User.id == Report.assignee_id)
         .where(Report.org_id.in_(member_org_ids(user_id)))
         .order_by(Report.created_at.desc(), Report.id.desc())
         .limit(limit + 1)
@@ -52,4 +54,6 @@ async def list_visible(
         query = query.where(Report.source == source)
     if program_id:
         query = query.where(Report.program_id == program_id)
+    if assignee_id:
+        query = query.where(Report.assignee_id == assignee_id)
     return [tuple(row) for row in (await db.execute(query)).all()]

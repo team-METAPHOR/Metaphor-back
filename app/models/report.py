@@ -57,6 +57,8 @@ class Report(Base):
     latest_job_id: Mapped[str | None] = mapped_column(String(ID_LENGTH))
     workflow_status: Mapped[str] = mapped_column(String(20), server_default="received")
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Kept (and still shown) when the member is later deactivated; no cascade.
+    assignee_id: Mapped[str | None] = fk("users.id", nullable=True, ondelete="SET NULL")
     error_type: Mapped[str] = mapped_column(String(30), server_default="manual")
     origin_kind: Mapped[str] = mapped_column(String(20), server_default="approved")
     # Whitelisted SDK environment/error metadata, redacted.

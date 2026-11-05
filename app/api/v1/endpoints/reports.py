@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import CurrentUser, DbSession
 from app.schemas.report import (
+    AssigneeUpdate,
     ClarificationCreate,
     JobQueued,
     JobRequest,
@@ -56,9 +57,16 @@ async def list_reports(
     cursor: str | None = None,
     source: Literal["platform", "widget"] | None = None,
     program_id: str | None = None,
+    assignee: Annotated[str | None, Query(max_length=64, description='"me" or a user id')] = None,
 ):
     return await service.list_reports(
-        db, user.id, limit=limit, cursor=cursor, source=source, program_id=program_id
+        db,
+        user.id,
+        limit=limit,
+        cursor=cursor,
+        source=source,
+        program_id=program_id,
+        assignee=assignee,
     )
 
 
@@ -72,6 +80,11 @@ async def set_workflow_status(
     report_id: str, body: WorkflowUpdate, user: CurrentUser, db: DbSession
 ):
     return await service.set_workflow_status(db, user.id, report_id, body.status)
+
+
+@router.patch("/{report_id}/assignee", response_model=ReportDetail)
+async def set_assignee(report_id: str, body: AssigneeUpdate, user: CurrentUser, db: DbSession):
+    return await service.set_assignee(db, user.id, report_id, body.user_id)
 
 
 @router.post("/{report_id}/clarifications", status_code=202, response_model=JobQueued)

@@ -14,6 +14,12 @@ class ReportCreated(BaseModel):
     created_at: datetime
 
 
+class Assignee(BaseModel):
+    id: str
+    display_name: str | None
+    email: str
+
+
 Progress = Literal["new", "reproducing", "reproduced", "triaged", "fixing", "dismissed", "closed"]
 
 
@@ -45,6 +51,8 @@ class ReportItem(BaseModel):
     workflow_status: str
     progress: Progress
     closed_at: datetime | None
+    # Shown as is even if the user was later deactivated or left the org.
+    assignee: Assignee | None
     latest_job: JobBrief | None
     created_at: datetime
 
@@ -72,6 +80,14 @@ class WorkflowUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
     status: Literal["received", "fixing", "dismissed"]
+
+
+class AssigneeUpdate(BaseModel):
+    """`user_id: null` unassigns. The user must be an active member of the report's org."""
+
+    model_config = {"extra": "forbid"}
+
+    user_id: str | None
 
 
 class ClarificationCreate(BaseModel):

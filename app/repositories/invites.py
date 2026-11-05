@@ -29,6 +29,10 @@ async def get_in_org(db: AsyncSession, org_id: str, invite_id: str) -> OrgInvite
     return await db.scalar(query.with_for_update())
 
 
+async def org_id_for_hash(db: AsyncSession, token_hash: str) -> str | None:
+    return await db.scalar(select(OrgInvite.org_id).where(OrgInvite.token_hash == token_hash))
+
+
 async def get_by_hash_for_update(db: AsyncSession, token_hash: str) -> OrgInvite | None:
     query = select(OrgInvite).where(OrgInvite.token_hash == token_hash).with_for_update()
     return await db.scalar(query)

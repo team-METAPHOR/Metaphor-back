@@ -11,7 +11,7 @@ from app.models import Membership, OrgInvite
 from app.repositories import invites as repo
 from app.repositories import orgs as orgs_repo
 from app.schemas.org import InviteAccepted, InviteCreated, InviteResponse
-from app.services.access import require_org_role
+from app.services.access import org_role, require_org_role
 from app.services.audit import count_actions, record_audit
 from app.services.auth import token_hash
 from app.services.limits import enforce_rate_limit, lock_key, since
@@ -30,9 +30,10 @@ async def create_invite(
     db: AsyncSession, actor_id: str, org_id: str, role: str, expires_in_days: int
 ) -> InviteCreated:
     async with db.begin():
-        await require_org_role(db, actor_id, org_id, "admin")
-        # Row lock: the pending count and the insert below must not interleave.
+        # Org row lock first, then the role check: a concurrent demotion (which takes the same
+        # lock) cannot slip between them, and the pending count and insert cannot interleave.
         await orgs_repo.get(db, org_id, for_update=True)
+        await require_org_role(db, actor_id, org_id, "admin")
         now = datetime.now(UTC)
         if await repo.count_pending(db, org_id, now) >= PENDING_LIMIT:
             raise ApiError(409, "INVITE_LIMIT", "대기 중인 초대가 너무 많습니다.")
@@ -70,6 +71,7 @@ async def list_invites(db: AsyncSession, actor_id: str, org_id: str) -> list[Inv
 
 async def revoke_invite(db: AsyncSession, actor_id: str, org_id: str, invite_id: str) -> None:
     async with db.begin():
+        await orgs_repo.get(db, org_id, for_update=True)
         await require_org_role(db, actor_id, org_id, "admin")
         invite = await repo.get_in_org(db, org_id, invite_id)
         if invite is None or invite.used_at is not None or invite.revoked_at is not None:
@@ -93,16 +95,21 @@ async def accept_invite(db: AsyncSession, user_id: str, token: str) -> InviteAcc
             code="INVITE_ACCEPT_LIMITED",
             message="초대 수락 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
         )
-        # Row lock: a concurrent accept of the same token waits here and then sees used_at.
-        invite = await repo.get_by_hash_for_update(db, hashed)
+        # Lock order org → invite, the same as create/revoke/role changes (no deadlock). The org
+        # lock serializes with demotions/removals so the creator check below is current; a
+        # concurrent accept of the same token waits and then sees used_at.
+        org_id = await repo.org_id_for_hash(db, hashed)
+        org = await orgs_repo.get(db, org_id, for_update=True) if org_id else None
+        invite = await repo.get_by_hash_for_update(db, hashed) if org else None
         now = datetime.now(UTC)
-        org = await orgs_repo.get(db, invite.org_id) if invite else None
         if (
             invite is not None
             and invite.used_at is None
             and invite.revoked_at is None
             and invite.expires_at > now
             and org.is_active
+            # An invite carries its creator's authority: void once they are no longer an admin.
+            and await org_role(db, invite.created_by, org.id) == "admin"
         ):
             membership = await orgs_repo.get_membership(db, org.id, user_id)
             if membership is not None and membership.is_active:

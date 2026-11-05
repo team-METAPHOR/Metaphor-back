@@ -251,3 +251,38 @@ async def test_accept_attempt_limit_429(client, db_session, world):
     assert response.json()["error"]["code"] == "INVITE_ACCEPT_LIMITED"
     row = await db_session.get(OrgInvite, created["id"])
     assert row.used_at is None
+
+
+@pytest.mark.parametrize("change", ["demote", "remove"])
+async def test_invite_dies_when_creator_loses_admin(client, db_session, world, change):
+    """An invite carries its creator's authority: once they are no longer an admin, it is void."""
+    org = world["org"]
+    second, second_h = await login_as(client, db_session, org, "admin")
+    created = await client.post(invites_url(org.id), json={"role": "admin"}, headers=second_h)
+    assert created.status_code == 201
+    await db_session.execute(
+        update(Membership)
+        .where(Membership.org_id == org.id, Membership.user_id == second.id)
+        .values(**({"role": "developer"} if change == "demote" else {"is_active": False}))
+    )
+    await db_session.commit()
+
+    _, joiner_h = await login_as(client, db_session)
+    response = await accept(client, joiner_h, created.json()["token"])
+    assert (response.status_code, response.json()["error"]["code"]) == (404, "INVITE_INVALID")
+    joined = await db_session.scalar(
+        select(func.count()).select_from(Membership).where(Membership.org_id == org.id)
+    )
+    assert joined == 3  # admin, dev, second — nobody new
+
+
+async def test_concurrent_accept_and_revoke_never_deadlock(client, db_session, world):
+    """Accept and revoke lock org → invite in the same order: one wins, neither errors."""
+    for _ in range(5):
+        created = await invite(client, world)
+        _, joiner_h = await login_as(client, db_session)
+        accepted, revoked = await asyncio.gather(
+            accept(client, joiner_h, created["token"]),
+            client.delete(invites_url(world["org"].id, created["id"]), headers=world["admin_h"]),
+        )
+        assert {accepted.status_code, revoked.status_code} in ({200, 404}, {404, 204})

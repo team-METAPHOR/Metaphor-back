@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from app.core.config import get_settings
 from app.models.validation_job import ENGINE_COMMIT
+from app.worker import provider_backoff
 
 SCHEMA_VERSION = 1
 ENGINE_PACKAGE = "metaphor-core-engine"
@@ -78,6 +79,7 @@ def build(
             "browser": asdict(browser_limits),
             "worker_hard_deadline_seconds": settings.worker_hard_deadline_seconds,
             "lease_seconds": settings.lease_seconds,
+            "provider_retry": asdict(provider_backoff.retry_policy()),
         },
         "browser": {
             "name": getattr(options, "browser_name", None),

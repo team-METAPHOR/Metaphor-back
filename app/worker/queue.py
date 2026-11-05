@@ -14,8 +14,12 @@ SET status = CASE WHEN status = 'cancelling' THEN 'cancelled' ELSE 'failed' END,
 """
 
 
-def claim_next(conn: psycopg.Connection, worker_id: str, *, lease_seconds: int) -> str | None:
-    """Finalize cancelled-while-queued jobs, then atomically claim the oldest queued job."""
+def claim_next(
+    conn: psycopg.Connection, worker_id: str, *, lease_seconds: int, providers: tuple = ()
+) -> str | None:
+    """Finalize cancelled-while-queued jobs, then atomically claim the oldest queued job that is
+    due (`run_after`). Nothing is claimed while one of this worker's model `providers` is in a
+    429 backoff (app/worker/provider_backoff.py): the next job would hit the same limit."""
     conn.execute(
         "UPDATE validation_jobs SET status = 'cancelled', finished_at = now() "
         "WHERE status = 'queued' AND cancel_requested_at IS NOT NULL"
@@ -29,13 +33,18 @@ def claim_next(conn: psycopg.Connection, worker_id: str, *, lease_seconds: int) 
         WHERE id = (
             SELECT id FROM validation_jobs
             WHERE status = 'queued' AND cancel_requested_at IS NULL
+              AND (run_after IS NULL OR run_after <= now())
+              AND NOT EXISTS (
+                  SELECT 1 FROM provider_backoffs
+                  WHERE provider = ANY(%(providers)s::text[]) AND until > now()
+              )
             ORDER BY created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
         RETURNING id
         """,
-        {"w": worker_id, "lease": lease_seconds},
+        {"w": worker_id, "lease": lease_seconds, "providers": list(providers)},
     ).fetchone()
     return row[0] if row else None
 

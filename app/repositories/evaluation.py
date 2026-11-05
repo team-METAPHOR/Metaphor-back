@@ -111,11 +111,16 @@ async def jobs_with_report_md(db: AsyncSession, job_ids: list[str]) -> set[str]:
     return set(rows)
 
 
-async def automatic_job_ids(db: AsyncSession, job_ids: list[str], action: str) -> set[str]:
-    rows = await db.scalars(
-        select(AuditEvent.target).where(AuditEvent.action == action, AuditEvent.target.in_(job_ids))
+async def automatic_job_ids(
+    db: AsyncSession, job_ids: list[str], actions: dict[str, str]
+) -> dict[str, str]:
+    """{job id: reason} for jobs created by one of the audit `actions` ({action: reason})."""
+    rows = await db.execute(
+        select(AuditEvent.target, AuditEvent.action).where(
+            AuditEvent.action.in_(list(actions)), AuditEvent.target.in_(job_ids)
+        )
     )
-    return set(rows)
+    return {target: actions[action] for target, action in rows}
 
 
 async def run_reports(

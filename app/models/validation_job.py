@@ -94,6 +94,8 @@ class ValidationJob(Base):
     # Worker readiness snapshot taken when the engine run starts (app/worker/readiness.py):
     # engine version/commit, configured models, critic switch, limits, browser. No secrets.
     readiness: Mapped[dict | None] = mapped_column(JSONB)
+    # Not claimed before this time (automatic retry after a provider Retry-After).
+    run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
     def has_conditions(self) -> bool:
@@ -179,3 +181,13 @@ class ModelUsage(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = created_at()
+
+
+class ProviderBackoff(Base):
+    """A model provider answered 429: workers that use it claim no job before `until`."""
+
+    __tablename__ = "provider_backoffs"
+
+    provider: Mapped[str] = mapped_column(String(30), primary_key=True)
+    until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = created_at()

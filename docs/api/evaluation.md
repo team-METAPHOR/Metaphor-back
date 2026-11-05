@@ -77,7 +77,7 @@ QA 작업은 `initial`·`fresh`·`resume`입니다. 수정 재검증(`retest`)�
 | `engine` | `package_version`(워커 가상환경에 설치된 `metaphor-core-engine` 버전), `commit`(워커 코드의 `ENGINE_COMMIT`) |
 | `models.primary` / `models.critic` | `provider`(`openai`/`groq`), `model`(설정 모델 ID), `timeout_seconds`. 비판 모델이 없으면 `critic: null` |
 | `critic` | `configured_provider`(`QA_CRITIC_PROVIDER` 값, 비어 있으면 `null`), `enabled`(비판 모델을 실제로 만들었는지). 코드 주석이 아니라 이 운영 설정 하나로 켜고 끕니다 |
-| `limits` | `qa`(엔진 `QALimits`: 호출 수·수리·실행 시간·토큰·계획 수정), `conditions`(조건 매트릭스일 때 `ConditionLimits`), `browser`(`BROWSER_LIMITS`), `worker_hard_deadline_seconds`, `lease_seconds` |
+| `limits` | `qa`(엔진 `QALimits`: 호출 수·수리·실행 시간·토큰·계획 수정), `conditions`(조건 매트릭스일 때 `ConditionLimits`), `browser`(`BROWSER_LIMITS`), `worker_hard_deadline_seconds`, `lease_seconds`, `provider_retry`(아래 429 정책 설정) |
 | `browser` | `name`, `width`, `height`, `step_timeout_ms`, `navigation_timeout_ms`, `record_video` (조건 매트릭스는 `conditions[]`에 조건별 브라우저·뷰포트) |
 | `scope` | `revision`(작업의 범위 리비전), `origin` |
 | `reset_adapter_id`, `state_changes_adapter_id` | 초기화 어댑터 ID와 쓰기 승인에 연결된 어댑터 ID(읽기 전용이면 `null`) |
@@ -107,3 +107,16 @@ API 키, 세션 헤더, 로그인 ID·비밀번호, 초기화 토큰, 제보 본
 - JSON: `{eval_run_id, generated_at, totals, items}`. `items[]`는 위 제보별 평가 기록과 같습니다. `totals`는 제보 수, 중복 접수 수, QA 작업 수, 재검증 수, 모델 호출 수(사용량 unknown 수 포함), 브라우저 시도 수, `report.md`가 저장된 작업 수(`report_files`), 결과별 건수입니다. 신고 건수·모델 호출 수·브라우저 시도 수·보고서 수를 따로 다시 셀 수 있습니다.
 - CSV: 제보당 한 행. 시간 구간 열(`queue_wait_ms` 등)은 결과를 정한 작업(처음 완료된 QA 작업, 없으면 마지막 QA 작업) 기준입니다. `input_tokens`/`output_tokens`는 사용량을 보고한 호출만 더하고, 보고한 호출이 없으면 빈 칸(0이 아님)이며 `usage_unknown_calls`로 빠진 수를 셉니다. 여러 값은 `|`로 잇습니다(`models`는 실제 응답 모델, `configured_models`는 설정 모델). `=`·`+`·`-`·`@`로 시작하는 문자열 셀은 스프레드시트 수식으로 실행되지 않게 앞에 `'`를 붙입니다.
 - 계정·비밀번호·세션·토큰, 모델 요청·응답 본문, 엔진 job id, 저장 경로는 넣지 않습니다. 보고서와 증거는 `report_url`·`jobs[].result_url`·`jobs[].artifacts_url` 링크로만 연결하며, 받으려면 같은 권한 검사를 다시 거칩니다.
+
+## 공급자 429 정책 (워커)
+
+엔진은 모델 호출을 스스로 재시도하지 않습니다. 워커가 결과를 저장한 뒤 모델 호출 중 `MODEL_RATE_LIMITED`가 있으면 기존 작업 큐(`validation_jobs`) 안에서만 다음처럼 처리합니다. 별도 브로커나 무한 재시도는 없습니다.
+
+1. **공급자 일시 정지**: 그 호출의 공급자(`role=primary` → `openai`, `role=critic` → `QA_CRITIC_PROVIDER` 값)를 `provider_backoffs`에 `지금 + Retry-After`까지 멈춥니다. 숫자 `Retry-After`가 없으면 30초, 최대 24시간입니다. 이미 더 늦은 정지가 있으면 유지합니다. 그 공급자를 쓰는 워커(주 모델은 항상 `openai`)는 정지 중 **어떤 작업도 claim하지 않습니다**. 대기 중인 다른 제보도 같은 한도에 걸릴 것이기 때문입니다.
+2. **지연된 자동 재시도 1건**: 작업이 `failed`/`inconclusive`이고 엔진 `error_code`가 `MODEL_RATE_LIMITED`이며, `initial`/`fresh` 작업이고 제보의 최신 작업이면 공용 `create_job`으로 `fresh` 작업을 만들고 `run_after = 지금 + 대기 시간`으로 둡니다. 워커는 `run_after` 전에는 claim하지 않습니다. 감사 기록 `job.provider_retry`(`source_job_id`, `provider`, `attempt`, `delay_seconds`, `chain_started_at`)를 남깁니다.
+3. **상한**: 같은 사슬의 자동 재시도는 `QA_PROVIDER_RETRY_MAX`(기본 1, 0이면 끔, 최대 3)회까지, 사슬 첫 작업 생성 후 `QA_PROVIDER_RETRY_DEADLINE_SECONDS`(기본 900초) 안에 시작할 수 있을 때만입니다. `Retry-After`가 `QA_PROVIDER_RETRY_MAX_WAIT_SECONDS`(기본 300초)보다 길면 자동 재시도하지 않습니다(공급자 정지는 그대로). 일일 실행 한도·활성 작업·소유 확인 등 `create_job` 거절도 재시도 없이 끝납니다. 조건 매트릭스, `resume`, `retest` 작업은 자동 재시도하지 않습니다.
+4. **비판 모델 실패**: 비판 모델의 429도 작업 실패로 기록됩니다. 엔진은 비판 모델 없이 단일 모델로 바꿔 계속하지 않고, 워커도 재시도 작업을 같은 `QA_CRITIC_PROVIDER` 설정으로 돌립니다. 준비 확인 스냅샷의 `critic.enabled`와 `plan_review.enabled`를 비교한 `critic_config_matches`로 확인합니다.
+
+평가 기록에서 자동 재시도 작업은 `automatic: true`, `automatic_reason: "provider_retry"`(불확실 판정 뒤 자동 재생성은 `"auto_fresh"`), `run_after`로 보이고 `retries`에 들어갑니다. 작업 응답(`GET /validation-jobs/{id}`)에도 `run_after`가 있습니다. 대기 중인 재시도는 다른 작업처럼 취소할 수 있습니다. 사람이 요청하는 재실행은 기존처럼 최신 작업의 `retry_available_at`까지 `429 PROVIDER_RATE_LIMITED`입니다([보고서 흐름](./reports-workflow.md)).
+
+평가 중에는 이 설정과 `QA_CRITIC_PROVIDER`를 바꾸지 마세요. 재시도 설정은 준비 확인 스냅샷의 `limits.provider_retry`에 남으므로, 바뀌면 `totals.readiness_configs`가 1보다 커집니다.

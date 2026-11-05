@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     lease_seconds: int = 30
     # Engine QA limit (180s) plus cleanup headroom.
     worker_hard_deadline_seconds: int = 210
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _strip_origins(cls, origins: list[str]) -> list[str]:
+        # Browsers send Origin as scheme://host[:port] with no path, so "https://x/" never
+        # matches; normalize instead of failing every request with CSRF_REJECTED.
+        return [o.strip().rstrip("/") for o in origins if o.strip()]
 
 
 @lru_cache

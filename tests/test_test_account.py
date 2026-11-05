@@ -337,6 +337,45 @@ async def test_load_login_builds_engine_options(client, db_session, conn, keypai
     assert PASSWORD not in repr(login)
 
 
+async def test_unauthenticated_paths_saved_and_passed_to_engine(
+    client, db_session, conn, keypair, monkeypatch
+):
+    """Trusted login config: a signed-out status probe's 401 (e.g. BugLab /api/auth/me) is
+    normal while signing in. Exact paths, inside the approved scope."""
+    from app.worker.test_accounts import load_login
+
+    world = await seeded(client, db_session)
+    monkeypatch.setenv(PRIVATE_KEY_ENV, keypair[0])
+    body = {**LOGIN_BODY, "unauthenticated_paths": ["/app/api/auth/me", "/app/api/auth/me"]}
+    saved = await client.put(url(world), json=body, headers=world["admin"])
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["unauthenticated_paths"] == ["/app/api/auth/me"]
+    assert (await client.get(url(world), headers=world["viewer"])).json()[
+        "unauthenticated_paths"
+    ] == ["/app/api/auth/me"]
+    login = load_login(conn, world["program"].id)
+    assert login.unauthenticated_paths == ("/app/api/auth/me",)
+
+
+@pytest.mark.parametrize(
+    ("paths", "code"),
+    [
+        (["/elsewhere/me"], "LOGIN_PATH_OUT_OF_SCOPE"),
+        (["/app/admin/me"], "LOGIN_PATH_OUT_OF_SCOPE"),
+        (["/app/./me"], "LOGIN_CONFIG_INVALID"),
+        (["/app/me?x=1"], "VALIDATION_FAILED"),
+        (["https://evil.example/app/me"], "VALIDATION_FAILED"),
+        ([f"/app/p{i}" for i in range(9)], "VALIDATION_FAILED"),
+    ],
+)
+async def test_unauthenticated_paths_validated(client, db_session, paths, code):
+    world = await seeded(client, db_session)
+    body = {**LOGIN_BODY, "unauthenticated_paths": paths}
+    response = await client.put(url(world), json=body, headers=world["admin"])
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == code
+
+
 async def test_moving_base_url_drops_test_account(client, db_session):
     """Credentials are bound to their site: a new origin must never receive them."""
     world = await seeded(client, db_session)

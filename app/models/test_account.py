@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Integer, LargeBinary, String
+from sqlalchemy import ARRAY, CheckConstraint, Integer, LargeBinary, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -31,6 +31,11 @@ class ProgramTestAccount(Base):
     submit_path: Mapped[str | None] = mapped_column(String(2048))
     success_path: Mapped[str | None] = mapped_column(String(2048))
     success_selector: Mapped[str | None] = mapped_column(String(256))
+    # Exact paths whose GET 401 is the app's normal signed-out probe while signing in
+    # (core_engine 0.6.0 LoginOptions.unauthenticated_paths, e.g. `/api/auth/me`).
+    unauthenticated_paths: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), server_default=text("'{}'"), nullable=False
+    )
     updated_by: Mapped[str | None] = fk("users.id", nullable=True, index=False)
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()

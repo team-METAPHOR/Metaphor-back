@@ -1,9 +1,14 @@
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 # A path on the program's origin: no scheme/host, query, fragment, backslash or whitespace.
 LOGIN_PATH_PATTERN = r"^/(?:[^/?#\\\s][^?#\\\s]*)?$"
+
+LoginPath = Annotated[str, Field(max_length=2048, pattern=LOGIN_PATH_PATTERN)]
+# Same bound as core_engine LoginOptions.unauthenticated_paths.
+MAX_UNAUTHENTICATED_PATHS = 8
 
 
 class TestAccountPut(BaseModel):
@@ -16,6 +21,8 @@ class TestAccountPut(BaseModel):
     submit_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
     success_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
     success_selector: str | None = Field(default=None, min_length=1, max_length=256)
+    # Exact paths (no prefixes) whose GET fetch/XHR 401 is normal while signing in.
+    unauthenticated_paths: list[LoginPath] = Field(default=[], max_length=MAX_UNAUTHENTICATED_PATHS)
 
 
 class TestAccountResponse(BaseModel):
@@ -31,4 +38,5 @@ class TestAccountResponse(BaseModel):
     submit_path: str | None = None
     success_path: str | None = None
     success_selector: str | None = None
+    unauthenticated_paths: list[str] = []
     updated_at: datetime | None

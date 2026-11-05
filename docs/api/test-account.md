@@ -37,6 +37,7 @@
 - `submit_path`(선택): 로그인 폼이 POST하는 경로. 생략하면 `login_path`로 제출합니다. 형식·범위 규칙은 `login_path`와 같습니다.
 - `success_path`(선택): 로그인 성공 후 도착하는 경로. 형식·범위 규칙은 `login_path`와 같고, `login_path`와 같으면 422 `LOGIN_CONFIG_INVALID`입니다.
 - `success_selector`(선택, 1~256자): 로그인 성공 후에만 보이는 CSS 선택자(예: `#signed-in`). 로그인 화면에 이미 보이는 요소면 엔진이 실패로 처리합니다.
+- `unauthenticated_paths`(선택, 최대 8개, 기본 `[]`): 로그인 준비 중 **비로그인 상태 조회의 401이 정상인 정확한 경로**(예: BugLab `["/api/auth/me"]`). 엔진 0.6.0 `LoginOptions.unauthenticated_paths`로 전달되며, 로그인 중 그 경로의 GET fetch/XHR 401만 면제합니다(접두사 아님, 로그인 POST 실패·403/500·문서 401·로그인 후 401은 면제 안 함). 형식은 `login_path`와 같고 승인 범위 안이어야 하며(밖이면 `LOGIN_PATH_OUT_OF_SCOPE`), 정규화된 형태가 아니면(`/a/./b` 등) `LOGIN_CONFIG_INVALID`입니다. `PUT`은 전체 교체이므로 다시 저장할 때 이 값도 함께 보내세요.
 - 엔진은 클릭만으로 로그인 성공을 추정하지 않습니다. `success_path`나 `success_selector` 중 하나 이상이 있어야 실행에 쓰입니다(둘 다 있으면 둘 다 확인).
 - 아이디·비밀번호 입력란과 제출 버튼은 엔진 기본 선택자(`input[autocomplete="username"]`·`input[type="email"]`·`input[name="username"]`, `input[type="password"]`, `button[type="submit"]` 등)로 찾습니다. MFA·CAPTCHA·외부 SSO·다단계 로그인은 지원하지 않습니다.
 - 형식 오류는 422 `VALIDATION_FAILED`이며, 입력값(비밀번호 포함)은 응답에 절대 다시 담지 않습니다.
@@ -49,7 +50,8 @@
 ```json
 {"configured": true, "in_use": true, "login_id_masked": "qa-***@metaphor.kr",
  "login_path": "/login", "submit_path": "/api/auth", "success_path": "/app/home",
- "success_selector": null, "updated_at": "2026-11-05T07:31:50Z"}
+ "success_selector": null, "unauthenticated_paths": ["/api/auth/me"],
+ "updated_at": "2026-11-05T07:31:50Z"}
 ```
 
 비밀번호와 전체 로그인 아이디는 어떤 응답에도 포함하지 않습니다. 저장된 계정이 없으면 `configured: false`, `in_use: false`이고 나머지는 `null`입니다.

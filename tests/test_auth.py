@@ -131,10 +131,25 @@ async def test_wrong_password_401_same_body_as_unknown_email(client):
     assert strip(wrong) == strip(unknown)
 
 
-async def test_login_rotates_session(client):
+async def test_login_on_another_device_keeps_existing_session(client):
     await signup(client)
     first = await login_token(client)
-    second = await login_token(client)
+    second = await login_token(client)  # another browser: no cookie is sent
+    assert first != second
+    assert (await client.get("/api/v1/auth/me", headers=as_user(first))).status_code == 200
+    assert (await client.get("/api/v1/auth/me", headers=as_user(second))).status_code == 200
+
+
+async def test_login_rotates_the_browsers_own_session(client):
+    await signup(client)
+    first = await login_token(client)
+    again = await client.post(  # the same browser logs in again with its cookie
+        "/api/v1/auth/login",
+        json={"email": "dev@example.com", "password": PASSWORD},
+        headers=as_user(first, **ORIGIN),
+    )
+    assert again.status_code == 200, again.text
+    second = again.cookies["sid"]
     assert first != second
     assert (await client.get("/api/v1/auth/me", headers=as_user(first))).status_code == 401
     assert (await client.get("/api/v1/auth/me", headers=as_user(second))).status_code == 200

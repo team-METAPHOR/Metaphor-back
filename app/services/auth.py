@@ -111,8 +111,15 @@ def _failures(key: str, cleared_by: str) -> Select:
     )
 
 
-async def login(db: AsyncSession, email: str, password: str, client_ip: str) -> tuple[User, str]:
-    """Return the user and a fresh raw session token. Old sessions are revoked (no fixation).
+async def login(
+    db: AsyncSession, email: str, password: str, client_ip: str, current_token: str | None = None
+) -> tuple[User, str]:
+    """Return the user and a fresh raw session token.
+
+    Every login gets a new server-generated token, and the session this browser already held
+    (`current_token`) is dropped, so a planted cookie never survives a login (no fixation).
+    Sessions on other browsers stay: one account may be signed in on several devices.
+    Password change and membership removal still revoke every session.
 
     Two failure counters, both from audit_events and keyed by HMAC so no raw PII is stored:
     - client IP + email: 5 failures in 15 minutes block that pair (brute force from one IP).
@@ -144,7 +151,8 @@ async def login(db: AsyncSession, email: str, password: str, client_ip: str) -> 
         stored = user.password_hash if user else _DUMMY_HASH
         ok = await asyncio.to_thread(verify_password, password, stored)
         if user and ok and user.is_active:
-            await repo.delete_user_sessions(db, user.id)
+            if current_token:
+                await repo.delete_session(db, token_hash(current_token))
             token = secrets.token_urlsafe(32)
             expires_at = datetime.now(UTC) + SESSION_TTL
             await repo.add_session(

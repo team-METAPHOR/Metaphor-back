@@ -30,7 +30,13 @@ async def signup(body: SignupRequest, db: DbSession, request: Request) -> UserRe
 async def login(
     body: LoginRequest, db: DbSession, request: Request, response: Response
 ) -> UserResponse:
-    user, token = await auth.login(db, body.email, body.password, client_ip(request))
+    user, token = await auth.login(
+        db,
+        body.email,
+        body.password,
+        client_ip(request),
+        current_token=request.cookies.get(SESSION_COOKIE),
+    )
     response.set_cookie(
         SESSION_COOKIE,
         token,

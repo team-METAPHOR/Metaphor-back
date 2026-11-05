@@ -9,9 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.integrations import storage
-from app.models import Artifact, ValidationJob
+from app.models import ValidationJob
 from app.repositories import artifacts as repo
-from app.repositories import reports as reports_repo
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.evidence import ArtifactItem, ArtifactList, DeveloperHandoff
 from app.services.access import org_role
@@ -39,10 +38,6 @@ def _not_found() -> ApiError:
     return ApiError(404, "NOT_FOUND", "근거를 찾을 수 없습니다.")
 
 
-def _org_only() -> ApiError:
-    return ApiError(403, "FORBIDDEN", "고객사 구성원만 볼 수 있습니다.")
-
-
 def _empty(state: str, job: ValidationJob | None) -> DeveloperHandoff:
     return DeveloperHandoff(
         state=state,
@@ -60,9 +55,7 @@ def _empty(state: str, job: ValidationJob | None) -> DeveloperHandoff:
 
 async def developer_handoff(db: AsyncSession, user_id: str, report_id: str) -> DeveloperHandoff:
     async with db.begin():
-        report, access = await load_visible_report(db, user_id, report_id)
-        if access != "org":
-            raise _org_only()
+        report = await load_visible_report(db, user_id, report_id)
         job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
         if job is None or job.status in ACTIVE:
             return _empty("pending", job)
@@ -90,9 +83,7 @@ async def developer_handoff(db: AsyncSession, user_id: str, report_id: str) -> D
 
 async def list_job_artifacts(db: AsyncSession, user_id: str, job_id: str) -> ArtifactList:
     async with db.begin():
-        job, _, access = await load_visible_job(db, user_id, job_id)
-        if access != "org":
-            raise _org_only()
+        job, _ = await load_visible_job(db, user_id, job_id)
         rows = await repo.list_for_job(db, job.id, datetime.now(UTC))
     return ArtifactList(
         items=[
@@ -113,15 +104,6 @@ def resolve_file(storage_key: str) -> Path | None:
     return path
 
 
-async def _can_download(db: AsyncSession, user_id: str, artifact: Artifact) -> bool:
-    if await org_role(db, user_id, artifact.org_id):
-        return True
-    if artifact.kind != "input_image" or artifact.visibility != "reporter":
-        return False
-    report = await reports_repo.get(db, artifact.report_id)
-    return report is not None and report.author_id is not None and report.author_id == user_id
-
-
 @dataclass(frozen=True)
 class Download:
     content: bytes
@@ -135,7 +117,7 @@ async def download(db: AsyncSession, user_id: str, artifact_id: str) -> Download
         if (
             artifact is None
             or artifact.expires_at <= datetime.now(UTC)
-            or not await _can_download(db, user_id, artifact)
+            or await org_role(db, user_id, artifact.org_id) is None
         ):
             raise _not_found()
         path = resolve_file(artifact.storage_key)

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select, update
 
-from app.models import QaResult, Report, User, ValidationJob
+from app.models import Membership, QaResult, Report, User, ValidationJob
 from app.models.validation_job import JobEvent
 from tests.factories import login_as, make_org, make_program
 from tests.test_core_intake import png
@@ -162,6 +162,14 @@ async def test_member_sees_report_and_job(client, db_session, world):
         "human_review_required",
     }
     assert "engine_job_id" not in job.json()
+
+
+async def test_author_who_left_org_gets_404(client, db_session, world):
+    report_id, job_id = await make_job(client, world)
+    await db_session.execute(update(Membership).values(is_active=False))
+    await db_session.commit()
+    for path in (f"/api/v1/reports/{report_id}", f"/api/v1/validation-jobs/{job_id}"):
+        assert (await client.get(path, headers=world["dev_h"])).status_code == 404, path
 
 
 async def test_org_member_result_not_ready_then_ready(client, db_session, world):

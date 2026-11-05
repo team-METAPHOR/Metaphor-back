@@ -81,7 +81,6 @@ async def write_artifact(db_session, world, name: str, data: bytes, kind: str, *
             storage_key=storage.relative_key(path),
             sha256=hashlib.sha256(data).hexdigest(),
             size=len(data),
-            visibility="org",
             expires_at=extra.pop("expires_at", datetime.now(UTC) + timedelta(days=30)),
             **extra,
         )
@@ -300,7 +299,6 @@ async def test_storage_key_traversal_rejected(client, db_session, world, tmp_pat
             storage_key=key,
             sha256="0" * 64,
             size=2,
-            visibility="org",
             expires_at=datetime.now(UTC) + timedelta(days=1),
         )
     )

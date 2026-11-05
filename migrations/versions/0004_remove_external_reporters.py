@@ -1,4 +1,4 @@
-"""remove external reporters (program invites, submission mode)
+"""remove external reporters (program invites, submission mode, artifact visibility)
 
 Revision ID: 0004
 Revises: 0003
@@ -20,9 +20,20 @@ def upgrade() -> None:
     op.drop_table("program_invites")
     op.drop_constraint(op.f("ck_programs_submission_mode"), "programs", type_="check")
     op.drop_column("programs", "submission_mode")
+    op.drop_constraint(op.f("ck_artifacts_visibility"), "artifacts", type_="check")
+    op.drop_column("artifacts", "visibility")
 
 
 def downgrade() -> None:
+    # Every remaining artifact is org-visible; the default only backfills existing rows.
+    op.add_column(
+        "artifacts",
+        sa.Column("visibility", sa.String(length=20), server_default="org", nullable=False),
+    )
+    op.alter_column("artifacts", "visibility", server_default=None)
+    op.create_check_constraint(
+        op.f("ck_artifacts_visibility"), "artifacts", "visibility IN ('reporter', 'org')"
+    )
     op.add_column(
         "programs",
         sa.Column(

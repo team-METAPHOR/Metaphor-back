@@ -223,7 +223,7 @@ async def test_live_screenshot_enabled_201(client, db_session, world):
     assert response.status_code == 201, response.text
     [report] = await reports(db_session)
     artifact = await db_session.get(Artifact, report.input_artifact_id)
-    assert artifact.visibility == "org"
+    assert artifact.kind == "input_image"
 
 
 async def test_page_url_origin_differs_from_request_origin_422(client, world):

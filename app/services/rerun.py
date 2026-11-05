@@ -60,8 +60,8 @@ async def request_job(
         json.dumps(body.model_dump(), sort_keys=True).encode()
     ).hexdigest()
     async with db.begin():
-        report, access = await load_visible_report(db, user_id, report_id)
-        if access != "org" or await org_role(db, user_id, report.org_id) not in RERUN_ROLES:
+        report = await load_visible_report(db, user_id, report_id)
+        if await org_role(db, user_id, report.org_id) not in RERUN_ROLES:
             raise ApiError(403, "FORBIDDEN", "재실행 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:

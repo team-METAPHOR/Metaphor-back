@@ -82,7 +82,6 @@ async def test_completed_persists_columns_and_artifacts(db_session, conn, monkey
     arts = (await db_session.scalars(select(Artifact).where(Artifact.job_id == job_id))).all()
     kinds = sorted(a.kind for a in arts)
     assert "report_md" in kinds and "json" in kinds
-    assert all(a.visibility == "org" for a in arts)
     usage = (await db_session.scalars(select(ModelUsage))).all()
     assert sorted((u.phase, u.input_tokens) for u in usage) == [("intake", None), ("plan", 10)]
 

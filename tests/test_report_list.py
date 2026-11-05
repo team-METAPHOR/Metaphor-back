@@ -11,10 +11,13 @@ from app.models import ValidationJob
 from app.models.report import RUN_BLOCKED_REASONS, WORKFLOW_STATUSES
 from app.models.validation_job import JOB_STATUSES, VERDICTS
 from app.schemas.validation_job import JobBrief
+from app.services.report_actions import ACTION_MESSAGES
 from app.services.reports import PROGRESS_VALUES, progress_case, report_progress
 from tests.factories import login_as, make_org, make_program, make_report
 
 NOW = datetime.now(UTC)
+ANSWER = ACTION_MESSAGES["ANSWER_QUESTIONS"]
+QUOTA = ACTION_MESSAGES["WAIT_FOR_QUOTA"]
 
 
 @pytest.fixture
@@ -298,12 +301,12 @@ async def test_summary_counts_by_progress_and_needs_attention(client, db_session
         "closed": 1,
     }
     assert body["needs_attention"] == [
-        {"id": r.id, "number": r.number, "title": r.title, "progress": p}
-        for r, p in (
-            (newest, "reproduced"),
-            (parked, "waiting_quota"),
-            (needs_info, "triaged"),
-            (older, "reproduced"),
+        {"id": r.id, "number": r.number, "title": r.title, "progress": p, "reason": reason}
+        for r, p, reason in (
+            (newest, "reproduced", None),
+            (parked, "waiting_quota", {"code": "WAIT_FOR_QUOTA", "message": QUOTA}),
+            (needs_info, "triaged", {"code": "ANSWER_QUESTIONS", "message": ANSWER}),
+            (older, "reproduced", None),
         )
     ]
 

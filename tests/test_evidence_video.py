@@ -347,6 +347,7 @@ def test_service_uses_raised_browser_budget(tmp_path):
     )
     assert service.browser_limits.max_concurrent_requests == 4
     assert service.browser_limits.max_total_requests == 300
+    assert service.browser_limits.max_download_bytes == 32 * 1024 * 1024
     # The 40,000 default ran out before plan revision on busy pages with reporter activity.
     assert service.limits.max_reported_tokens == 100_000
 

@@ -229,8 +229,8 @@ class JobRequest(BaseModel):
 
     @model_validator(mode="after")
     def _retest_fields(self):
-        if self.mode == "retest" and not (self.baseline_job_id and self.app_version):
-            raise ValueError("retest requires baseline_job_id and app_version")
+        if self.mode == "retest" and not self.baseline_job_id:
+            raise ValueError("retest requires baseline_job_id")
         if self.mode == "fresh" and (self.baseline_job_id or self.app_version):
             raise ValueError("fresh takes no baseline_job_id or app_version")
         conditions = self.condition_ids or self.auto_select_conditions or self.max_conditions

@@ -40,6 +40,6 @@ scripts/vendor-sdk.sh v0.2.0      # downloads metaphor.js, writes VERSION, print
 git add -f vendor/sdk && uv run pytest -q tests/test_sdk_serving.py
 ```
 
-`versions/0.1.1/` preserves the previous immutable bundle and metadata. The API loads archived
+`versions/0.1.1/` and `versions/0.1.2/` preserve the previous immutable bundles and metadata. The API loads archived
 versions at startup, so existing pinned install snippets keep their original bytes and SRI.
 SDK 0.2.0 activity context needs engine 0.8.1 or later (`reporter_activity`).

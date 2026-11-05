@@ -57,3 +57,21 @@ class PlatformOperator(Base):
 
     user_id: Mapped[str] = fk("users.id", ondelete="CASCADE", primary_key=True)
     created_at: Mapped[datetime] = created_at()
+
+
+class OrgInvite(Base):
+    """Single-use invite link. Only sha256(token) is stored; the raw token is shown once."""
+
+    __tablename__ = "org_invites"
+    __table_args__ = (one_of("role", MEMBERSHIP_ROLES, "role"),)
+
+    id: Mapped[str] = id_pk()
+    org_id: Mapped[str] = fk("organizations.id", ondelete="CASCADE")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    role: Mapped[str] = mapped_column(String(20))
+    created_by: Mapped[str] = fk("users.id", ondelete="CASCADE", index=False)
+    created_at: Mapped[datetime] = created_at()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    used_by: Mapped[str | None] = fk("users.id", nullable=True, ondelete="SET NULL", index=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

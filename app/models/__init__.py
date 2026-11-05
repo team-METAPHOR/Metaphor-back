@@ -3,7 +3,14 @@
 from app.models.artifact import Artifact
 from app.models.audit import AuditEvent, IdempotencyRecord
 from app.models.base import Base
-from app.models.identity import Membership, Organization, PlatformOperator, Session, User
+from app.models.identity import (
+    Membership,
+    Organization,
+    OrgInvite,
+    PlatformOperator,
+    Session,
+    User,
+)
 from app.models.program import Program, ProgramScopeRevision
 from app.models.report import Clarification, Report
 from app.models.validation_job import JobEvent, ModelUsage, QaResult, ValidationJob
@@ -18,6 +25,7 @@ __all__ = [
     "JobEvent",
     "Membership",
     "ModelUsage",
+    "OrgInvite",
     "Organization",
     "PlatformOperator",
     "Program",

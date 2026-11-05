@@ -8,10 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Membership, Organization, User
-from app.models.identity import MEMBERSHIP_ROLES
 from app.repositories import orgs as repo
 from app.schemas.org import MemberResponse, OrgDetail, OrgResponse
-from app.services.access import deactivate_membership, require_org_role
+from app.services.access import (
+    ADMIN_ROLES,
+    READ_ROLES,
+    deactivate_membership,
+    require_org_role,
+)
 from app.services.audit import count_actions, record_audit
 from app.services.idempotency import run_once
 from app.services.limits import enforce_rate_limit, lock_key, since
@@ -68,13 +72,13 @@ async def _detail(db: AsyncSession, org: Organization, role: str) -> OrgDetail:
 
 async def get_org(db: AsyncSession, user_id: str, org_id: str) -> OrgDetail:
     async with db.begin():
-        role = await require_org_role(db, user_id, org_id, *MEMBERSHIP_ROLES)
+        role = await require_org_role(db, user_id, org_id, *READ_ROLES)
         return await _detail(db, await repo.get(db, org_id), role)
 
 
 async def rename_org(db: AsyncSession, user_id: str, org_id: str, name: str) -> OrgDetail:
     async with db.begin():
-        role = await require_org_role(db, user_id, org_id, "admin")
+        role = await require_org_role(db, user_id, org_id, *ADMIN_ROLES)
         org = await repo.get(db, org_id, for_update=True)
         if org.name != name:
             org.name = name
@@ -99,7 +103,7 @@ def _member(membership: Membership, user: User) -> MemberResponse:
 async def list_members(db: AsyncSession, user_id: str, org_id: str) -> list[MemberResponse]:
     """Every member sees active members; admins also see deactivated ones."""
     async with db.begin():
-        role = await require_org_role(db, user_id, org_id, *MEMBERSHIP_ROLES)
+        role = await require_org_role(db, user_id, org_id, *READ_ROLES)
         rows = await repo.list_members(db, org_id, include_inactive=role == "admin")
         return [_member(m, u) for m, u in rows]
 
@@ -127,9 +131,9 @@ async def change_member_role(
 ) -> MemberResponse:
     async with db.begin():
         # Lock before the role check: a concurrent demotion of the actor must be seen.
-        await require_org_role(db, actor_id, org_id, *MEMBERSHIP_ROLES)
+        await require_org_role(db, actor_id, org_id, *READ_ROLES)
         await _lock_org(db, org_id)
-        await require_org_role(db, actor_id, org_id, "admin")
+        await require_org_role(db, actor_id, org_id, *ADMIN_ROLES)
         membership = await _active_member(db, org_id, user_id)
         if membership.role != role:
             if role != "admin":
@@ -152,9 +156,9 @@ async def remove_member(db: AsyncSession, actor_id: str, org_id: str, user_id: s
     """Admins remove anyone; any member may remove themselves (leave). Sessions are revoked."""
     is_self = actor_id == user_id
     async with db.begin():
-        await require_org_role(db, actor_id, org_id, *MEMBERSHIP_ROLES)
+        await require_org_role(db, actor_id, org_id, *READ_ROLES)
         await _lock_org(db, org_id)
-        await require_org_role(db, actor_id, org_id, *(MEMBERSHIP_ROLES if is_self else ("admin",)))
+        await require_org_role(db, actor_id, org_id, *(READ_ROLES if is_self else ADMIN_ROLES))
         membership = await _active_member(db, org_id, user_id)
         await _ensure_not_last_admin(db, membership)
         await deactivate_membership(db, org_id, user_id)

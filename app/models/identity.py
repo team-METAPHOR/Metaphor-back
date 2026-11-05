@@ -6,7 +6,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 from app.models.columns import created_at, fk, id_pk, one_of
 
-MEMBERSHIP_ROLES = ("developer", "reviewer", "admin")
+# admin: org/program/widget administration plus everything a developer does.
+# developer: file reports, rerun/retest, answer, cancel, triage. viewer: read only.
+MEMBERSHIP_ROLES = ("admin", "developer", "viewer")
 
 
 class Organization(Base):

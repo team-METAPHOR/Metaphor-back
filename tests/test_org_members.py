@@ -37,7 +37,7 @@ async def active_admins(db_session, org_id) -> int:
 
 async def test_members_list_visible_to_members_only(client, db_session, world):
     org = world["org"]
-    gone, _ = await login_as(client, db_session, org, "reviewer")
+    gone, _ = await login_as(client, db_session, org, "viewer")
     membership = await db_session.get(Membership, (org.id, gone.id))
     membership.is_active = False
     await db_session.commit()
@@ -67,17 +67,17 @@ async def test_members_list_visible_to_members_only(client, db_session, world):
 async def test_admin_changes_role(client, db_session, world):
     org, dev = world["org"], world["dev"]
     response = await client.patch(
-        members_url(org.id, dev.id), json={"role": "reviewer"}, headers=world["admin_h"]
+        members_url(org.id, dev.id), json={"role": "viewer"}, headers=world["admin_h"]
     )
     assert response.status_code == 200, response.text
-    assert response.json()["role"] == "reviewer"
+    assert response.json()["role"] == "viewer"
     membership = await db_session.get(Membership, (org.id, dev.id))
     await db_session.refresh(membership)
-    assert membership.role == "reviewer"
+    assert membership.role == "viewer"
     audit = await db_session.scalar(
         select(AuditEvent).where(AuditEvent.action == "member.role_change")
     )
-    assert audit.target == dev.id and audit.detail == {"from": "developer", "to": "reviewer"}
+    assert audit.target == dev.id and audit.detail == {"from": "developer", "to": "viewer"}
 
     bad = await client.patch(
         members_url(org.id, dev.id), json={"role": "owner"}, headers=world["admin_h"]

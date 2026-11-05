@@ -22,6 +22,7 @@ async def world(client, db_session):
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
     body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "program": program,
@@ -29,6 +30,7 @@ async def world(client, db_session):
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
+        "viewer_h": viewer_h,
     }
 
 
@@ -131,9 +133,9 @@ async def test_baseline_from_other_report_404(client, db_session, world):
     assert response.status_code == 404
 
 
-async def test_only_reviewer_or_admin(client, db_session, world):
+async def test_viewer_cannot_rerun(client, db_session, world):
     await finish(db_session, world["job_id"])
-    response = await request(client, world, {"mode": "fresh"}, world["dev_h"])
+    response = await request(client, world, {"mode": "fresh"}, world["viewer_h"])
     assert response.status_code == 403
 
 

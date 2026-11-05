@@ -22,8 +22,9 @@ async def world(client, db_session):
     program = await make_program(db_session, org)
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
-    _, reviewer_h = await login_as(client, db_session, org, "reviewer")
+    _, triager_h = await login_as(client, db_session, org, "developer")
     _, dev_h = await login_as(client, db_session, org, "developer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
     body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "org": org,
@@ -31,8 +32,9 @@ async def world(client, db_session):
         "report_id": body["id"],
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
-        "reviewer_h": reviewer_h,
+        "triager_h": triager_h,
         "dev_h": dev_h,
+        "viewer_h": viewer_h,
     }
 
 
@@ -40,7 +42,7 @@ async def patch(client, world, status, headers=None):
     return await client.patch(
         f"/api/v1/reports/{world['report_id']}/workflow",
         json={"status": status},
-        headers=headers or world["reviewer_h"],
+        headers=headers or world["triager_h"],
     )
 
 
@@ -51,7 +53,7 @@ async def report_row(db_session, report_id):
 # --- PATCH /reports/{id}/workflow ---------------------------------------------
 
 
-async def test_reviewer_moves_to_fixing_and_audits(client, db_session, world):
+async def test_developer_moves_to_fixing_and_audits(client, db_session, world):
     response = await patch(client, world, "fixing")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -80,8 +82,8 @@ async def test_same_status_is_noop_200(client, world):
     assert (response.status_code, response.json()["workflow_status"]) == (200, "received")
 
 
-async def test_developer_403_stranger_404(client, db_session, world):
-    assert (await patch(client, world, "fixing", world["dev_h"])).status_code == 403
+async def test_viewer_403_stranger_404(client, db_session, world):
+    assert (await patch(client, world, "fixing", world["viewer_h"])).status_code == 403
     _, stranger_h = await login_as(client, db_session)
     assert (await patch(client, world, "fixing", stranger_h)).status_code == 404
     other = await make_org(db_session, "Other")
@@ -112,7 +114,7 @@ async def test_close_without_verified_fix_409(client, world):
 
 
 async def test_requires_csrf_origin(client, world):
-    headers = {"Cookie": world["reviewer_h"]["Cookie"]}
+    headers = {"Cookie": world["triager_h"]["Cookie"]}
     assert (await patch(client, world, "fixing", headers)).status_code == 403
 
 

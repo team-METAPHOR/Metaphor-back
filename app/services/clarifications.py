@@ -10,7 +10,7 @@ from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.core.text import sanitize_text
 from app.models import Clarification, Program, ValidationJob
-from app.services.access import org_role
+from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.jobs import create_job, enforce_job_request_limit
@@ -19,7 +19,6 @@ from app.services.reports import load_visible_report
 # Must match core_engine QAService.resume, which appends this to the stored description.
 ANSWER_SEPARATOR = "\n추가 답변:\n"
 ENGINE_DESCRIPTION_LIMIT = 8000
-ANSWER_ROLES = ("reviewer", "admin")
 
 
 async def answer_question(
@@ -37,7 +36,7 @@ async def answer_question(
 
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
-        if await org_role(db, user_id, report.org_id) not in ANSWER_ROLES:
+        if await org_role(db, user_id, report.org_id) not in WRITE_ROLES:
             raise ApiError(403, "FORBIDDEN", "추가 답변 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:

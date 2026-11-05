@@ -52,9 +52,9 @@ def without_request_id(response) -> dict:
 
 
 async def test_admin_creates_invite_token_shown_once(client, db_session, world):
-    created = await invite(client, world, role="reviewer", expires_in_days=3)
+    created = await invite(client, world, role="viewer", expires_in_days=3)
     assert set(created) == {"id", "role", "expires_at", "token"}
-    assert created["role"] == "reviewer" and len(created["token"]) >= 43
+    assert created["role"] == "viewer" and len(created["token"]) >= 43
     expires_at = datetime.fromisoformat(created["expires_at"])
     assert timedelta(days=2, hours=23) < expires_at - datetime.now(UTC) <= timedelta(days=3)
 
@@ -63,7 +63,7 @@ async def test_admin_creates_invite_token_shown_once(client, db_session, world):
     assert listed.json() == [
         {
             "id": created["id"],
-            "role": "reviewer",
+            "role": "viewer",
             "created_by": world["admin"].id,
             "expires_at": created["expires_at"],
         }
@@ -87,17 +87,17 @@ async def test_admin_creates_invite_token_shown_once(client, db_session, world):
 
 
 async def test_accept_creates_membership_with_role(client, db_session, world):
-    created = await invite(client, world, role="reviewer")
+    created = await invite(client, world, role="viewer")
     joiner, joiner_h = await login_as(client, db_session)
     response = await accept(client, joiner_h, created["token"])
     assert response.status_code == 200, response.text
     assert response.json() == {
         "org_id": world["org"].id,
         "org_name": world["org"].name,
-        "role": "reviewer",
+        "role": "viewer",
     }
     membership = await db_session.get(Membership, (world["org"].id, joiner.id))
-    assert membership.role == "reviewer" and membership.is_active
+    assert membership.role == "viewer" and membership.is_active
     row = await db_session.get(OrgInvite, created["id"])
     await db_session.refresh(row)
     assert row.used_by == joiner.id and row.used_at is not None

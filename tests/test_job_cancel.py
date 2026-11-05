@@ -14,11 +14,13 @@ async def world(client, db_session):
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
     body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
+        "viewer_h": viewer_h,
     }
 
 
@@ -62,8 +64,8 @@ async def test_cancel_finished_409(client, db_session, world):
     assert response.json()["error"]["detail"] == {"status": "completed"}
 
 
-async def test_developer_403_stranger_404(client, db_session, world):
-    assert (await cancel(client, world, world["dev_h"])).status_code == 403
+async def test_viewer_403_stranger_404(client, db_session, world):
+    assert (await cancel(client, world, world["viewer_h"])).status_code == 403
     _, stranger_h = await login_as(client, db_session)
     assert (await cancel(client, world, stranger_h)).status_code == 404
 

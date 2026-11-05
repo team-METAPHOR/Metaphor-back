@@ -8,7 +8,7 @@ from app.models import ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
-from app.services.access import org_role
+from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.reports import load_visible_report
 
@@ -52,15 +52,12 @@ async def list_events(
         return EventList(items=[EventOut.model_validate(e, from_attributes=True) for e in events])
 
 
-CANCEL_ROLES = ("reviewer", "admin")
-
-
 async def cancel_job(db: AsyncSession, user_id: str, job_id: str) -> dict:
     """queued → cancelled at once; running → cancelling (the worker confirms the stop).
     Conditional updates make cancel-vs-finish races resolve to exactly one terminal state."""
     async with db.begin():
         job, report = await load_visible_job(db, user_id, job_id)
-        if await org_role(db, user_id, report.org_id) not in CANCEL_ROLES:
+        if await org_role(db, user_id, report.org_id) not in WRITE_ROLES:
             raise ApiError(403, "FORBIDDEN", "작업을 취소할 권한이 없습니다.")
 
         now = func.now()

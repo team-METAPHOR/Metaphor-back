@@ -157,6 +157,7 @@ async def put_account(
             "submit_path": body.submit_path,
             "success_path": body.success_path,
             "success_selector": body.success_selector,
+            "submit_selector": body.submit_selector,
             "unauthenticated_paths": list(dict.fromkeys(body.unauthenticated_paths)),
             "updated_by": user_id,
         }

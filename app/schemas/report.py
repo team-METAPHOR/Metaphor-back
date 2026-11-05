@@ -24,25 +24,31 @@ class Assignee(BaseModel):
     active: bool
 
 
-Progress = Literal["new", "reproducing", "reproduced", "triaged", "fixing", "dismissed", "closed"]
+Progress = Literal[
+    "new", "reproducing", "reproduced", "triaged", "verified", "fixing", "dismissed", "closed"
+]
 
 
 class ReportItem(BaseModel):
-    """`progress` is the dashboard stage, computed from `workflow_status` and the latest job:
+    """`progress` is the dashboard stage, computed from `workflow_status`, `fix_verified` and
+    the latest job (first matching row wins):
 
     | workflow_status | latest job                                    | progress      |
     |-----------------|-----------------------------------------------|---------------|
     | closed          | (any)                                         | `closed`      |
     | dismissed       | (any)                                         | `dismissed`   |
+    | received/fixing | (any), with `fix_verified`                    | `verified`    |
     | fixing          | (any)                                         | `fixing`      |
     | received        | none                                          | `new`         |
     | received        | queued / running / cancelling                 | `reproducing` |
     | received        | finished, verdict `reproduced`                | `reproduced`  |
     | received        | finished, any other verdict or none           | `triaged`     |
 
-    Finished = completed / inconclusive / needs_info / failed / cancelled. Dashboard stages:
+    Finished = completed / inconclusive / needs_info / failed / cancelled. `fix_verified` = the
+    latest *finished* job is a retest that ended completed + not_reproduced. Dashboard stages:
     new → 신규 신고, reproducing → 재현 중, reproduced/triaged → 재현 완료, fixing → 버그 수정 중,
-    closed → 마감 (only after a passing retest). dismissed is a manual side exit.
+    verified → 수정 확인됨 (awaiting a manual close), closed → 마감 (closed by a person, only
+    once the fix is verified). dismissed is a manual side exit.
     """
 
     id: str
@@ -56,6 +62,8 @@ class ReportItem(BaseModel):
     duplicate_count: int
     workflow_status: str
     progress: Progress
+    # Latest finished job is a passing retest; required to close (PATCH workflow "closed").
+    fix_verified: bool
     closed_at: datetime | None
     # Shown as is even if the user was later deactivated or left the org.
     assignee: Assignee | None
@@ -81,11 +89,11 @@ class ReportDetail(ReportItem):
 
 
 class WorkflowUpdate(BaseModel):
-    """`closed` is not accepted: only a passing retest closes a report."""
+    """`closed` is accepted only while `fix_verified` is true (else 409 FIX_NOT_VERIFIED)."""
 
     model_config = {"extra": "forbid"}
 
-    status: Literal["received", "fixing", "dismissed"]
+    status: Literal["received", "fixing", "dismissed", "closed"]
 
 
 class AssigneeUpdate(BaseModel):

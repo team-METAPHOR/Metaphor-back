@@ -121,8 +121,16 @@ async def test_image_report_reproduced_then_resolved_by_retest(
     result = await get_json(client, f"/api/v1/validation-jobs/{retest_id}", world["admin_h"])
     assert (result["verdict"], result["regression"]) == ("not_reproduced", "resolved_in_test")
     report = await get_json(client, f"/api/v1/reports/{report_id}", world["admin_h"])
-    # A passing retest closes the report (마감).
-    assert (report["workflow_status"], report["progress"]) == ("closed", "closed")
+    # A passing retest only verifies the fix; a person then closes the report (마감).
+    assert report["fix_verified"] is True
+    assert (report["workflow_status"], report["progress"]) == ("received", "verified")
+    closed = await client.patch(
+        f"/api/v1/reports/{report_id}/workflow",
+        json={"status": "closed"},
+        headers=world["admin_h"],
+    )
+    assert closed.status_code == 200, closed.text
+    assert (closed.json()["workflow_status"], closed.json()["progress"]) == ("closed", "closed")
 
     # Someone outside the customer org cannot even see that the job exists.
     _, stranger_h = await login_as(client, db_session)

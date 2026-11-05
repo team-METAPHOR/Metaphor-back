@@ -9,14 +9,15 @@
 
 ## 대시보드 5단계
 
-신규 신고 → 재현 중 → 재현 완료 → 버그 수정 중 → 마감
+신규 신고 → 재현 중 → 재현 완료 → 버그 수정 중 → (수정 확인됨) → 마감
 
-화면 단계는 목록·상세 응답의 `progress` 값으로 정합니다. 서버가 `workflow_status`와 최신 검증 작업(`latest_job`)을 보고 계산합니다.
+화면 단계는 목록·상세 응답의 `progress` 값으로 정합니다. 서버가 `workflow_status`, `fix_verified`, 최신 검증 작업(`latest_job`)을 보고 계산하며, 표의 위쪽 행부터 먼저 맞는 값을 씁니다.
 
 | `workflow_status` | 최신 작업 | `progress` | 화면 단계 |
 |---|---|---|---|
 | `closed` | 상관없음 | `closed` | 마감 |
 | `dismissed` | 상관없음 | `dismissed` | (단계 밖: 버그 아님·중복) |
+| `received` / `fixing` | 상관없음, `fix_verified: true` | `verified` | 수정 확인됨 (마감 대기) |
 | `fixing` | 상관없음 | `fixing` | 버그 수정 중 |
 | `received` | 없음 | `new` | 신규 신고 |
 | `received` | `queued` / `running` / `cancelling` | `reproducing` | 재현 중 |
@@ -25,6 +26,12 @@
 
 "끝남"은 `completed` / `inconclusive` / `needs_info` / `failed` / `cancelled`입니다.
 
+## 수정 확인 (`fix_verified`)
+
+- 목록·상세 응답의 `fix_verified: bool`. 그 제보의 **가장 최근에 끝난 작업**이 `retest`이고 `completed` + 판정 `not_reproduced`이면 `true`입니다.
+- 끝나지 않은 작업(`queued`/`running`/`cancelling`)은 보지 않습니다. 통과한 재검증 뒤에 새 작업이 돌고 있어도 끝날 때까지는 `true`이고, 그 작업이 다른 결과로 끝나면 `false`로 돌아갑니다.
+- 재검증이 통과해도 워커는 상태를 바꾸지 않습니다. 사람이 아래 `PATCH ... {status: "closed"}`로 마감합니다. 화면은 `fix_verified`가 `true`일 때 "수정 확인이 통과했습니다. 이 버그를 마감할까요?" 확인 창을 띄웁니다.
+
 ## 처리 상태 (`workflow_status`)
 
 | 값 | 뜻 | 바꾸는 주체 |
@@ -32,19 +39,20 @@
 | `received` | 신규 | 사람 (기본값, 다시 열기) |
 | `fixing` | 버그 수정 중 | 사람 |
 | `dismissed` | 버그 아님·중복으로 종료 | 사람 |
-| `closed` | 마감 | 시스템만 |
+| `closed` | 마감 | 사람 (수정 확인된 제보만) |
 
 `PATCH /reports/{id}/workflow {status}` — reviewer, admin — 200 제보 상세
 
-- `status`는 `received` / `fixing` / `dismissed` 중 하나입니다. `closed`나 그 밖의 값은 422 `VALIDATION_FAILED`입니다.
-- 이미 `closed`인 제보는 바꿀 수 없습니다: 409 `REPORT_CLOSED`.
+- `status`는 `received` / `fixing` / `dismissed` / `closed` 중 하나입니다. 그 밖의 값은 422 `VALIDATION_FAILED`입니다.
+- `closed`는 그 순간 `fix_verified`가 `true`일 때만 됩니다. 아니면 409 `FIX_NOT_VERIFIED`입니다. 마감하면 `closed_at`을 기록합니다.
+- 이미 `closed`인 제보는 바꿀 수 없습니다(다시 `closed`로 보내도): 409 `REPORT_CLOSED`.
 - `dismissed` → `received`로 다시 열 수 있습니다. 같은 상태로 보내도 200(변경 없음)입니다.
 - 감사 로그 `report.workflow` `{from, to}`. 마이그레이션 0007: `in_review`→`received`, `accepted`→`fixing`.
 
-### 마감(자동)
+### 마감
 
-- `retest`가 `completed` + `not_reproduced`로 끝나면, 워커가 결과 저장과 같은 트랜잭션에서 `closed`, `closed_at`을 기록하고 행위자 없는(`actor_id` NULL) 감사 로그 `report.workflow` `{from, to: "closed", job_id}`를 남깁니다.
-- 다시 재현되거나 결론이 없으면 상태는 그대로입니다. `initial`/`fresh`/`resume`은 마감시키지 않습니다.
+- 자동 마감은 없습니다. 통과한 재검증은 `fix_verified`만 `true`로 만들고, 마감은 위 `PATCH`로 사람이 합니다. 감사 로그는 다른 상태 변경과 같은 `report.workflow` `{from, to: "closed"}`이고 `actor_id`는 마감한 사람입니다.
+- 이전 버전에서 자동 마감된 제보(`actor_id` NULL 감사 로그)는 그대로 `closed`로 남습니다.
 
 ## 담당자 (`assignee`)
 

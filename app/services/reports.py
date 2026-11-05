@@ -213,9 +213,15 @@ def _brief(job: ValidationJob | None) -> JobBrief | None:
     return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=job.verdict)
 
 
-def report_progress(workflow_status: str, job: JobBrief | ValidationJob | None) -> str:
+def report_progress(
+    workflow_status: str, job: JobBrief | ValidationJob | None, fix_verified: bool = False
+) -> str:
     """Dashboard stage; the mapping table is documented on `ReportItem`."""
-    if workflow_status in ("closed", "dismissed", "fixing"):
+    if workflow_status in ("closed", "dismissed"):
+        return workflow_status
+    if fix_verified:
+        return "verified"
+    if workflow_status == "fixing":
         return workflow_status
     if job is None:
         return "new"
@@ -237,6 +243,8 @@ def _item(
     job: ValidationJob | None,
     assignee: User | None = None,
     assignee_active: bool | None = None,
+    *,
+    fix_verified: bool,
 ) -> dict:
     return {
         "id": report.id,
@@ -248,7 +256,8 @@ def _item(
         "origin_kind": report.origin_kind,
         "duplicate_count": report.duplicate_count,
         "workflow_status": report.workflow_status,
-        "progress": report_progress(report.workflow_status, job),
+        "progress": report_progress(report.workflow_status, job, fix_verified),
+        "fix_verified": fix_verified,
         "closed_at": report.closed_at,
         "assignee": _assignee(assignee, assignee_active),
         "latest_job": _brief(job),
@@ -278,12 +287,13 @@ async def list_reports(
             program_id=program_id,
             assignee_id=user_id if assignee == "me" else assignee,
         )
+        verified = await reports_repo.fix_verified_ids(db, [row[0].id for row in rows[:limit]])
     page = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
         last = page[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(*row)) for row in page]
+    items = [ReportItem(**_item(*row, fix_verified=row[0].id in verified)) for row in page]
     return ReportList(items=items, next_cursor=next_cursor)
 
 
@@ -309,8 +319,9 @@ async def get_report_by_number(
 async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
     assignee = await reports_repo.get_assignee(db, report.id) if report.assignee_id else None
+    verified = report.id in await reports_repo.fix_verified_ids(db, [report.id])
     return ReportDetail(
-        **_item(report, job, *(assignee or ())),
+        **_item(report, job, *(assignee or ()), fix_verified=verified),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,
@@ -333,18 +344,26 @@ async def _require_triage_role(db: AsyncSession, user_id: str, report: Report) -
 async def set_workflow_status(
     db: AsyncSession, user_id: str, report_id: str, status: str
 ) -> ReportDetail:
-    """Manual review status (received / fixing / dismissed). `closed` is system-only (passing
-    retest) and final: a closed report can no longer be changed here."""
+    """Review status. `closed` (마감) needs a verified fix at that moment (latest finished job is
+    a passing retest) and is final: a closed report can no longer be changed here."""
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
         await _require_triage_role(db, user_id, report)
-        # Row lock so a concurrent auto-close is not overwritten.
+        # Row lock so two concurrent changes (e.g. a double close) serialize.
         await db.refresh(report, with_for_update=True)
         if report.workflow_status == "closed":
-            raise ApiError(409, "REPORT_CLOSED", "재검증으로 마감된 제보는 변경할 수 없습니다.")
+            raise ApiError(409, "REPORT_CLOSED", "마감된 제보는 변경할 수 없습니다.")
+        if status == "closed" and report.id not in await reports_repo.fix_verified_ids(
+            db, [report.id]
+        ):
+            raise ApiError(
+                409, "FIX_NOT_VERIFIED", "수정 확인(재검증)을 통과한 제보만 마감할 수 있습니다."
+            )
         previous = report.workflow_status
         if previous != status:
             report.workflow_status = status
+            if status == "closed":
+                report.closed_at = datetime.now(UTC)
             await db.flush()
             await record_audit(
                 db,

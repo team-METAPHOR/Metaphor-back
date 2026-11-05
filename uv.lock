@@ -618,7 +618,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14,<2" },
     { name = "cryptography", specifier = ">=44,<51" },
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "metaphor-core-engine", path = "vendor/metaphor_core_engine-0.7.2-py3-none-any.whl" },
+    { name = "metaphor-core-engine", path = "vendor/metaphor_core_engine-0.8.1-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
@@ -633,17 +633,17 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24,<2" },
     { name = "ruff", specifier = ">=0.9,<1" },
 ]
-worker = [{ name = "metaphor-core-engine", extras = ["browser", "video"], path = "vendor/metaphor_core_engine-0.7.2-py3-none-any.whl" }]
+worker = [{ name = "metaphor-core-engine", extras = ["browser", "video"], path = "vendor/metaphor_core_engine-0.8.1-py3-none-any.whl" }]
 
 [[package]]
 name = "metaphor-core-engine"
-version = "0.7.2"
-source = { path = "vendor/metaphor_core_engine-0.7.2-py3-none-any.whl" }
+version = "0.8.1"
+source = { path = "vendor/metaphor_core_engine-0.8.1-py3-none-any.whl" }
 dependencies = [
     { name = "pillow" },
 ]
 wheels = [
-    { filename = "metaphor_core_engine-0.7.2-py3-none-any.whl", hash = "sha256:145ead48d8d0a0500dbb62a9d00bd187ed633f4389a56687aefe8bf546101208" },
+    { filename = "metaphor_core_engine-0.8.1-py3-none-any.whl", hash = "sha256:60b2887aac97d1d1c7b04a35e64e0da42807de4e0f35e0fae98c7c5aab2f3e46" },
 ]
 
 [package.optional-dependencies]

@@ -8,7 +8,9 @@ from app.core.errors import ApiError
 from app.core.text import redact
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import validation_jobs as jobs_repo
+from app.schemas.evidence import Diagnosis
 from app.schemas.validation_job import ConditionInfo, ConditionResultItem, ConditionResultList
+from app.services import diagnosis as diagnosis_service
 from app.services.validation_jobs import load_visible_job
 
 PROGRESS_BASIS = "completed_steps_only_not_symptom_similarity"
@@ -52,6 +54,21 @@ def stop_point(row: dict) -> str | None:
     elif row.get("error_code"):
         text = f"실행 전 중단 ({row['error_code']})"
     return redact(text)[:STOP_POINT_MAX] if text else None
+
+
+def row_diagnosis(row: dict) -> Diagnosis | None:
+    """A child's execution diagnosis from its matrix row (the engine copies the child's
+    `diagnosis` and `environment` there): next actions, approval, attempts, network facts.
+    Per-attempt request lists stay in the child's own result file (job artifacts)."""
+    if not isinstance(row.get("diagnosis"), dict):
+        return None
+    report = {
+        "status": row.get("status"),
+        "diagnosis": row["diagnosis"],
+        "environment": row.get("environment"),
+        "run": {"verdict": {"value": row.get("verdict")}},
+    }
+    return diagnosis_service.build(str(row.get("status")), {"report": report})[1]
 
 
 def outcome(row: dict, job_active: bool) -> str:
@@ -114,6 +131,7 @@ async def list_condition_results(db: AsyncSession, user_id: str, job_id: str):
             error_code=row.get("error_code"),
             stop_point=stop_point(row),
             duration_ms=row.get("duration_ms"),
+            diagnosis=row_diagnosis(row),
         )
         for index, row in enumerate(rows, start=1)
     ]

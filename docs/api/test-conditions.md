@@ -120,6 +120,10 @@ HTTP 원점에서 세션이 연결된 조건을 수정하면 422 `CREDENTIALS_RE
 
 - `outcome`: `reproduced` / `not_reproduced` / `blocked`(오류·막힌 단계로 끝남) /
   `inconclusive` / `not_run`(실행하지 못함) / `running`(실행 중).
+- `diagnosis`: 조건 실행(하위 작업)의 실행 진단. 개발자 전달의 `diagnosis`와 같은 형식이며
+  `next_actions`, `state_changes`, `attempts`, `observed_facts`를 담습니다. 엔진이 조건 행에 복사하지 않는
+  시도별 `blocked_requests`·`state_changing_requests`는 빈 목록이며, 하위 작업의 결과 파일(작업 근거 파일)에 있습니다.
+  실행하지 않은 조건은 `null`입니다.
 - `stop_point`: 멈춘 지점 요약(예: `1/3단계 후 중단 (SELECTOR_NOT_FOUND): click #pay`).
   일반 텍스트이며 URL은 경로만, 입력 값과 쿼리 문자열은 넣지 않습니다.
 - `attempted`: 실제로 실행한 조건 수(`not_run` 제외). `reproduced`: 재현된 조건 수.

@@ -13,12 +13,15 @@ from app.schemas.evidence import (
     AiHypotheses,
     AiQuestions,
     AttemptVideo,
+    BlockedRequest,
     Diagnosis,
     DiagnosisAttempt,
     Hypothesis,
     NextAction,
     NextStep,
     ObservedFact,
+    StateChangeApproval,
+    StateChangingRequest,
     TimelineEntry,
     Timings,
 )
@@ -36,6 +39,8 @@ _FAILED = {
 }
 _MAX_ITEMS = 50
 _MAX_TEXT = 2000
+_METHODS = ("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")
+_WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
 
 def _dict(value) -> dict:
@@ -133,6 +138,72 @@ def _videos(report: dict) -> dict[int, AttemptVideo]:
     return videos
 
 
+def _method(value, allowed=_METHODS) -> str | None:
+    return value if value in allowed else None
+
+
+def _path(value) -> str | None:
+    """Same-origin path only (no query/fragment/params), via the public URL rule."""
+    if not isinstance(value, str) or not value.startswith("/") or value.startswith("//"):
+        return None
+    url = public_url("https://path.invalid" + value)
+    return url.removeprefix("https://path.invalid") if url else None
+
+
+def _blocked(value) -> list[BlockedRequest]:
+    items = []
+    for item in _list(value):
+        item = _dict(item)
+        url = public_url(item.get("url"))
+        if url:
+            items.append(
+                BlockedRequest(
+                    method=_method(item.get("method")),
+                    url=url,
+                    resource_type=_match(_NAME, item.get("resource_type")),
+                    blocker=_match(_CODE, item.get("blocker")),
+                    send_attempted=_bool(item.get("send_attempted")),
+                    non_fatal=_bool(item.get("non_fatal")),
+                )
+            )
+    return items
+
+
+def _writes(value) -> list[StateChangingRequest]:
+    items = []
+    for item in _list(value):
+        item = _dict(item)
+        method, path = _method(item.get("method"), _WRITE_METHODS), _path(item.get("path"))
+        if method and path:
+            items.append(
+                StateChangingRequest(
+                    method=method,
+                    path=path,
+                    send_attempted=_bool(item.get("send_attempted")),
+                    status=_int(item.get("status")),
+                    blocker=_match(_CODE, item.get("blocker")),
+                )
+            )
+    return items
+
+
+def state_changes(environment) -> StateChangeApproval | None:
+    """`environment.state_changes` as the engine recorded it; anything malformed → None."""
+    value = _dict(_dict(environment).get("state_changes"))
+    rules = []
+    for rule in _list(value.get("allowed_requests")):
+        if isinstance(rule, list | tuple) and len(rule) == 2:
+            method, path = _method(rule[0], _WRITE_METHODS), _path(rule[1])
+            if method and path:
+                rules.append((method, path))
+    adapter = _match(_ID, value.get("reset_adapter_id"))
+    if value.get("environment") not in ("test", "staging") or not adapter or not rules:
+        return None
+    return StateChangeApproval(
+        environment=value["environment"], reset_adapter_id=adapter, allowed_requests=rules
+    )
+
+
 def _attempt(item: dict, raw_evidence: dict, steps: list, videos: dict) -> DiagnosisAttempt | None:
     attempt, completed = _int(item.get("attempt")), _int(item.get("completed_steps"))
     if attempt is None or completed is None:
@@ -165,10 +236,30 @@ def _attempt(item: dict, raw_evidence: dict, steps: list, videos: dict) -> Diagn
         observation_ids=_ids(item.get("observation_ids")),
         timeline=_timeline(raw_evidence.get("timeline")),
         video=videos.get(attempt),
+        blocked_requests=_blocked(raw_evidence.get("blocked_requests")),
+        state_changing_requests=_writes(raw_evidence.get("state_changing_requests")),
     )
 
 
-def _facts(value) -> list[ObservedFact]:
+def _non_fatal(observations) -> set[tuple]:
+    """(method, public url, status, blocker) of network entries the engine marked non-fatal."""
+    keys = set()
+    for snapshot in _list(observations):
+        for request in _list(_dict(snapshot).get("network")):
+            request = _dict(request)
+            if request.get("non_fatal") is True:
+                keys.add(
+                    (
+                        request.get("method"),
+                        public_url(request.get("url")),
+                        request.get("status"),
+                        request.get("blocker"),
+                    )
+                )
+    return keys
+
+
+def _facts(value, non_fatal: set[tuple] = frozenset()) -> list[ObservedFact]:
     facts = []
     for item in _list(value):
         item = _dict(item)
@@ -184,6 +275,8 @@ def _facts(value) -> list[ObservedFact]:
                 status=_int(item.get("status")),
                 blocker=_match(_CODE, item.get("blocker")),
                 observation_ids=_ids(item.get("observation_ids")),
+                non_fatal=(method, url, item.get("status"), item.get("blocker")) in non_fatal
+                or None,
             )
         )
     return facts
@@ -280,7 +373,7 @@ def build(job_status: str, raw: dict | None) -> tuple[str, Diagnosis | None]:
         interpretation=_text(engine.get("interpretation")),
         reason_codes=codes,
         attempts=attempts,
-        observed_facts=_facts(engine.get("observed_facts")),
+        observed_facts=_facts(engine.get("observed_facts"), _non_fatal(report.get("observations"))),
         next_actions=_actions(engine.get("next_actions")),
         missing_information=AiQuestions(
             items=[q for q in (_text(v) for v in _list(questions)) if q]
@@ -292,5 +385,6 @@ def build(job_status: str, raw: dict | None) -> tuple[str, Diagnosis | None]:
         )
         if timings
         else None,
+        state_changes=state_changes(report.get("environment")),
     )
     return ("available" if has_engine else "derived"), diagnosis

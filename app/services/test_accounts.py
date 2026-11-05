@@ -8,6 +8,7 @@ from core_engine import PolicyError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import credentials
 from app.core import test_account_crypto as crypto
 from app.core.config import get_settings
 from app.core.errors import ApiError
@@ -116,6 +117,7 @@ async def put_account(
         public_key = _public_key()
         await _limit_writes(db, program.id)
         revision = await programs_repo.get_revision(db, program)
+        credentials.require_https(revision.base_url)
         for path in (body.login_path, body.submit_path, body.success_path):
             if path is not None:
                 _check_login_path(revision, path)

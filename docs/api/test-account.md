@@ -1,7 +1,7 @@
 # 테스트 계정 API
 
 로그인이 필요한 화면을 검증하려고 프로그램마다 테스트 계정(로그인 아이디 + 비밀번호)을 하나 저장합니다.
-워커는 엔진(core_engine 0.4.0, e396348)의 폼 로그인으로 탐색과 두 번의 재현 시도 직전에 매번 새로 로그인합니다.
+워커는 엔진(core_engine 0.4.1, 0f833d2)의 폼 로그인으로 탐색과 두 번의 재현 시도 직전에 매번 새로 로그인합니다.
 쿠키 세션 API이므로 쓰기 요청에는 허용된 `Origin`이 필요합니다(CSRF).
 
 | 메서드 | 경로 | 권한 |
@@ -11,6 +11,16 @@
 | `DELETE` | `/api/v1/programs/{program_id}/test-account` | `admin` |
 
 다른 회사 프로그램이나 없는 프로그램은 404, `developer`·`viewer`의 쓰기는 403입니다.
+
+## HTTPS 필수 (엔진 0.4.1)
+
+테스트 계정과 운영자 세션(`Authorization`/`Cookie` 헤더)은 유효한 인증서가 있는 HTTPS 원점에서만 씁니다.
+엔진은 HTTP 대상이면 연결 전에 `CREDENTIALS_REQUIRE_HTTPS`로 거절하며, localhost·사설망 예외나 인증서 검증 해제 옵션은 없습니다. 인증 없는 HTTP 검증은 그대로 가능합니다.
+
+- 프로그램 `base_url`이 HTTP이면 `PUT`은 422 `CREDENTIALS_REQUIRE_HTTPS`입니다.
+- 계정·운영자 세션·조건 세션이 있는 프로그램의 `base_url`을 HTTP로 바꾸면 422 `CREDENTIALS_REQUIRE_HTTPS`입니다. 먼저 계정을 삭제하거나 HTTPS 주소를 쓰세요.
+- 세션이 연결된 테스트 조건은 프로그램 원점이 HTTP이면 수정할 때 422 `CREDENTIALS_REQUIRE_HTTPS`입니다.
+- 0.4.1 이전에 저장된 HTTP+인증 설정은 프로그램 응답의 `scope.credentials_blocked_by_http: true`로 표시합니다(비밀 값은 포함하지 않음). 이 상태의 실행은 워커가 엔진 호출 전에 `CREDENTIALS_REQUIRE_HTTPS`로 실패시키고, `required_actions`에 `USE_HTTPS_FOR_CREDENTIALS`(HTTPS 재등록 안내)가 붙습니다. HTTP로 자동 재시도하지 않습니다.
 
 ## 저장·교체 `PUT`
 
@@ -50,7 +60,7 @@
   - 운영자가 연결한 세션(`has_session`의 운영자 세션)이 없음. 엔진은 고정 세션 헤더와 폼 로그인을 함께 쓰지 않으므로 운영자 세션이 우선합니다
   `false`이면 화면에서 "저장됨(실행에 적용 안 됨)"으로 보여 주고, 위 조건 중 빠진 것을 안내해 주세요. 조건 매트릭스 작업은 조건마다 같은 규칙(조건의 `test_context_id`)을 따릅니다.
 
-프로그램 응답의 `scope.has_test_account`는 계정 저장 여부이고, `scope.has_session`은 운영자가 연결한 세션이 있거나 테스트 계정이 저장되어 있으면 `true`입니다.
+프로그램 응답의 `scope.has_test_account`는 계정 저장 여부, `scope.credentials_blocked_by_http`는 HTTP 원점에 저장된 계정·운영자 세션이 있어 실행이 막힌 상태이고, `scope.has_session`은 운영자가 연결한 세션이 있거나 테스트 계정이 저장되어 있으면 `true`입니다.
 
 ## 삭제 `DELETE`
 
@@ -64,6 +74,7 @@
   - `LOGIN_FAILED`(엔진): 계정 오류, 폼 불일치, 성공 신호 미확인. 판정은 `inconclusive`이며 `required_actions`에 `CHECK_TEST_ACCOUNT`가 붙습니다.
   - `TEST_ACCOUNT_INVALID`(워커): 저장된 계정을 열 수 없음(키 교체 등). 다시 저장해야 하며 `required_actions`는 `TEST_ACCOUNT_REQUIRED`입니다.
   - `TEST_ACCOUNT_KEY_MISSING`·`TEST_ACCOUNT_KEY_INVALID`(워커): 워커에 개인키가 없거나 잘못됨. 운영자 조치가 필요하며 `required_actions`는 `TEST_ACCOUNT_REQUIRED`입니다.
+  - `CREDENTIALS_REQUIRE_HTTPS`(워커 사전 확인·엔진): HTTP 원점에 계정·세션 사용. `required_actions`는 `USE_HTTPS_FOR_CREDENTIALS`입니다.
   - 로그인 경로가 범위를 벗어나면(저장 후 범위가 바뀐 경우) `PATH_OUT_OF_SCOPE` 등 → `CHECK_TARGET_URL`.
 
 ## 보관 방식

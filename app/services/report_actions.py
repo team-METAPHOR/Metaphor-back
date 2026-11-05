@@ -24,6 +24,10 @@ ACTION_MESSAGES = {
         "등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요"
     ),
     "CHECK_TARGET_URL": "테스트 대상 URL과 허용 범위를 확인해 주세요",
+    "USE_HTTPS_FOR_CREDENTIALS": (
+        "테스트 계정이나 세션은 HTTPS 대상에서만 사용할 수 있습니다. "
+        "프로그램 원점을 유효한 인증서가 있는 HTTPS 주소로 다시 등록해 주세요"
+    ),
     "ANSWER_QUESTIONS": "추가 질문에 답하면 다시 검증합니다",
     "WAIT_FOR_PROVIDER": "AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요",
     "RETRY_PROVIDER_LATER": "AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요",
@@ -42,6 +46,8 @@ CODE_ACTIONS = {
     # Engine form login (0.4.0): wrong account, form mismatch or no success signal. Job
     # error_code on the first exploration, run.evidence[].blocker on a reproduction attempt.
     "LOGIN_FAILED": "CHECK_TEST_ACCOUNT",
+    # Engine 0.4.1 / worker pre-run check: a session or test account on a non-HTTPS origin.
+    "CREDENTIALS_REQUIRE_HTTPS": "USE_HTTPS_FOR_CREDENTIALS",
     # Engine RunPolicy / browser session: the target is outside scope or cannot be opened.
     "ORIGIN_OUT_OF_SCOPE": "CHECK_TARGET_URL",
     "PATH_OUT_OF_SCOPE": "CHECK_TARGET_URL",

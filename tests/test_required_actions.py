@@ -84,6 +84,8 @@ async def test_viewer_reads_required_actions_and_best_attempt(client, db_session
         ("backend_error_code", "SESSION_SECRET_INVALID", "TEST_ACCOUNT_REQUIRED"),
         ("backend_error_code", "TEST_ACCOUNT_INVALID", "TEST_ACCOUNT_REQUIRED"),
         ("error_code", "LOGIN_FAILED", "CHECK_TEST_ACCOUNT"),
+        ("error_code", "CREDENTIALS_REQUIRE_HTTPS", "USE_HTTPS_FOR_CREDENTIALS"),
+        ("backend_error_code", "CREDENTIALS_REQUIRE_HTTPS", "USE_HTTPS_FOR_CREDENTIALS"),
         ("error_code", "PATH_OUT_OF_SCOPE", "CHECK_TARGET_URL"),
         ("error_code", "DNS_FAILED", "CHECK_TARGET_URL"),
         ("error_code", "MODEL_RATE_LIMITED", "WAIT_FOR_PROVIDER"),

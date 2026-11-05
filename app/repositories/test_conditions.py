@@ -41,3 +41,16 @@ async def unbind_sessions(db: AsyncSession, program_id: str) -> None:
         .where(ProgramTestCondition.program_id == program_id)
         .values(session_secret_ref=None)
     )
+
+
+async def has_sessions(db: AsyncSession, program_id: str) -> bool:
+    return bool(
+        await db.scalar(
+            select(func.count())
+            .select_from(ProgramTestCondition)
+            .where(
+                ProgramTestCondition.program_id == program_id,
+                ProgramTestCondition.session_secret_ref.is_not(None),
+            )
+        )
+    )

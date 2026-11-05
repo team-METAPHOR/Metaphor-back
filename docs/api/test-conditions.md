@@ -45,6 +45,8 @@
 `has_session`(true/false)만 나옵니다. 워커는 `QA_SESSION_<ORG_ID>_<REF>` 환경변수에서
 헤더를 읽습니다. `test_context_id`를 바꾸면 그 조건의 세션 연결은 풀립니다(다른 계정이므로).
 프로그램 `base_url`이 바뀌면 모든 조건의 세션 연결이 풀립니다.
+세션은 HTTPS 원점에서만 씁니다(엔진 0.4.1). 세션이 연결된 조건이 있으면 `base_url`을 HTTP로 바꿀 수 없고,
+HTTP 원점에서 세션이 연결된 조건을 수정하면 422 `CREDENTIALS_REQUIRE_HTTPS`입니다([테스트 계정 API](test-account.md#https-필수-엔진-041) 참고).
 
 ## 조건 비교 실행 (`POST /reports/{report_id}/validation-jobs`)
 

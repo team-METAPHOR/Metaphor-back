@@ -14,6 +14,7 @@ import pytest
 from PIL import Image
 
 from app.core.config import get_settings
+from app.models import QaResult
 from app.worker import queue, runner
 from tests.e2e.site import search_site
 from tests.factories import login_as, make_org, make_program
@@ -83,7 +84,7 @@ async def test_image_report_reproduced_then_resolved_by_retest(
         data={
             "program_id": world["program"].id,
             "target_url": url,
-            "description": "cat 검색 후 결과 없는 검색어로 검색하면 cat 목록이 그대로 남아요",
+            "description": "cat 검색 후 missing으로 검색하면 cat 목록이 그대로 남아요",
         },
         files={"screenshot": ("s.png", screenshot(), "image/png")},
         headers=world["dev_h"],
@@ -142,7 +143,7 @@ async def test_needs_info_answer_resumes_with_new_job(client, db_session, world,
     url = f"{world['base']}/app/search"
     created = await client.post(
         "/api/v1/reports",
-        data={"program_id": world["program"].id, "target_url": url},
+        data={"program_id": world["program"].id, "target_url": url, "test_data": "cat, missing"},
         files={"screenshot": ("s.png", screenshot(), "image/png")},
         headers=world["dev_h"],
     )
@@ -186,7 +187,7 @@ async def test_widget_js_error_report_reaches_verdict(client, db_session, world,
     assert settings.status_code == 200, settings.text
     key = settings.json()["public_project_key"]
     payload = {
-        "description": "검색 후 오류가 났어요",
+        "description": "cat 검색 후 missing을 검색하면 오류가 났어요",
         "page_url": f"{base}/app/search",
         "error_type": "js_error",
         "error": {"message": "TypeError: x is undefined", "stack_top": "app.js:12:5"},
@@ -256,3 +257,31 @@ async def test_real_model_reproduces_search_bug(client, db_session, world, conn)
     await run_worker(conn, job_id, None)
     job = await get_json(client, f"/api/v1/validation-jobs/{job_id}", world["admin_h"])
     assert job["status"] in ("completed", "needs_info", "inconclusive"), job
+
+
+async def test_critic_reviews_plan_before_execution(client, db_session, world, conn):
+    """With a critic configured, the plan is reviewed once before the browser runs."""
+    url = f"{world['base']}/app/search"
+    created = await client.post(
+        "/api/v1/reports",
+        data={
+            "program_id": world["program"].id,
+            "target_url": url,
+            "description": "cat 검색 후 missing으로 검색하면 cat 목록이 그대로 남아요",
+        },
+        files={"screenshot": ("s.png", screenshot(), "image/png")},
+        headers=world["dev_h"],
+    )
+    job_id = created.json()["validation_job_id"]
+    critic = ScriptedModel(
+        [{"assessment": {"decision": "accept", "summary": "제보 순서와 검사 조건이 맞습니다."}}]
+    )
+    assert queue.claim_next(conn, "e2e-worker", lease_seconds=60) == job_id
+    model = ScriptedModel([intake(), plan(url), analysis()])
+    await asyncio.to_thread(runner.execute_job, job_id, model=model, reviewer=critic)
+    job = await get_json(client, f"/api/v1/validation-jobs/{job_id}", world["admin_h"])
+    assert (job["status"], job["verdict"]) == ("completed", "reproduced"), job
+    assert len(critic.calls) == 1
+    raw = (await db_session.get(QaResult, job_id)).raw["report"]
+    assert raw["plan_review"]["status"] == "accepted"
+    assert [c["phase"] for c in raw["model_calls"]] == ["intake", "plan", "plan_review", "report"]

@@ -1,9 +1,10 @@
-"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at 2ccf627."""
+"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at d04c232."""
 
 import copy
 import json
 
 from core_engine import Generation, QAResult, TokenUsage
+from core_engine.qa_schema import PLAN_SCHEMA, draft_plan
 
 
 def intake(status="ready"):
@@ -31,8 +32,13 @@ class ScriptedModel:
         self.calls.append(kwargs)
         if not self.responses:
             raise AssertionError("unexpected model call")
-        response = self.responses.pop(0)
-        return Generation(json.dumps(copy.deepcopy(response)), "offline", TokenUsage(100, 50))
+        response = copy.deepcopy(self.responses.pop(0))
+        if isinstance(response, Exception):
+            raise response
+        # The engine's plan schema is the model-facing draft shape since d04c232.
+        if kwargs.get("schema") == PLAN_SCHEMA and response.get("plan") is not None:
+            response["plan"] = draft_plan(response["plan"])
+        return Generation(json.dumps(response), "offline", TokenUsage(100, 50))
 
 
 def completed_report(engine_job_id, *, analysis=True, error_code=None):

@@ -108,7 +108,7 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 
 ## 5. Security rules
 
-- Secrets (`OPENAI_API_KEY`, `QA_SESSION_<REF>` test session headers) exist only in the worker
+- Secrets (`OPENAI_API_KEY`, `GROQ_API_KEY`, `QA_SESSION_<REF>` test session headers) exist only in the worker
   environment. Never in API settings, responses, logs, queue rows, or tests' snapshots.
 - Uploaded screenshots: validate with `core_engine.Screenshot`, apply reporter `mask_boxes`
   with `Screenshot.masked`, persist **only** the masked image. Never keep the raw upload.
@@ -190,7 +190,7 @@ review the generated file → `uv run alembic upgrade head`. Never create tables
 - Prefer the smallest change that satisfies the task. Reuse shared services (`create_report`,
   `create_job`, `run_once`, `enforce_rate_limit`, `record_audit`) instead of re-implementing.
 - No new dependency without a reason stated in the PR. Stdlib first.
-- Do not modify the engine (`metaphor-core-engine`, pinned at `2ccf627`), Playwright behavior,
+- Do not modify the engine (`metaphor-core-engine`, pinned at `d04c232`), Playwright behavior,
   or model prompts from this repo.
 - Error responses use the shared envelope:
   `{"error": {"code": "UPPER_SNAKE", "message": "...", "request_id": "..."}}`.

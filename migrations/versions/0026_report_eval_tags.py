@@ -1,13 +1,11 @@
 """report_eval_tags: evaluator-only slot per report
 
-Revision ID: 0030
-Revises: 0022
+Revision ID: 0026
+Revises: 0025
 Create Date: 2026-11-06 12:00:00
 
 Issue #105. (eval_run_id, case_id, repeat_id) per report, stored apart from `reports` so the
 worker (which loads reports.* as engine input) never sees it. One report per slot per org.
-Numbered 0030 to leave 0023-0029 to the engine 0.6.0 stack (#102); re-point down_revision to
-that stack's last revision when rebasing onto main.
 """
 
 from collections.abc import Sequence
@@ -15,8 +13,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0030"
-down_revision: str | Sequence[str] | None = "0022"
+revision: str = "0026"
+down_revision: str | Sequence[str] | None = "0025"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

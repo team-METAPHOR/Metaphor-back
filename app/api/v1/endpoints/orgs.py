@@ -5,6 +5,11 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import CurrentUser, DbSession
 from app.schemas.org import (
+    InviteAccept,
+    InviteAccepted,
+    InviteCreate,
+    InviteCreated,
+    InviteResponse,
     MemberResponse,
     MemberRolePatch,
     OrgCreate,
@@ -12,6 +17,7 @@ from app.schemas.org import (
     OrgPatch,
     OrgResponse,
 )
+from app.services import invites
 from app.services import orgs as service
 
 router = APIRouter(tags=["orgs"])
@@ -54,3 +60,24 @@ async def change_member_role(
 async def remove_member(org_id: str, user_id: str, user: CurrentUser, db: DbSession) -> Response:
     await service.remove_member(db, user.id, org_id, user_id)
     return Response(status_code=204)
+
+
+@router.post("/orgs/{org_id}/invites", status_code=201, response_model=InviteCreated)
+async def create_invite(org_id: str, body: InviteCreate, user: CurrentUser, db: DbSession):
+    return await invites.create_invite(db, user.id, org_id, body.role, body.expires_in_days)
+
+
+@router.get("/orgs/{org_id}/invites", response_model=list[InviteResponse])
+async def list_invites(org_id: str, user: CurrentUser, db: DbSession):
+    return await invites.list_invites(db, user.id, org_id)
+
+
+@router.delete("/orgs/{org_id}/invites/{invite_id}", status_code=204)
+async def revoke_invite(org_id: str, invite_id: str, user: CurrentUser, db: DbSession) -> Response:
+    await invites.revoke_invite(db, user.id, org_id, invite_id)
+    return Response(status_code=204)
+
+
+@router.post("/invites/accept", response_model=InviteAccepted)
+async def accept_invite(body: InviteAccept, user: CurrentUser, db: DbSession):
+    return await invites.accept_invite(db, user.id, body.token)

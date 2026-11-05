@@ -340,6 +340,15 @@ def test_record_video_follows_operator_flag(monkeypatch, tmp_path, value, expect
     assert service.options.record_video is expected
 
 
+def test_service_uses_raised_browser_budget(tmp_path):
+    # Engine default (2 concurrent) aborts a page that loads HTML, JS and CSS in parallel.
+    service = runner.build_service(
+        snapshot(), runner.JobStore(tmp_path), model=None, app_version="1"
+    )
+    assert service.browser_limits.max_concurrent_requests == 4
+    assert service.browser_limits.max_total_requests == 300
+
+
 def test_encoder_check_logs_error_code_when_missing(monkeypatch, caplog):
     monkeypatch.setenv("QA_VIDEO_ENABLED", "true")
     monkeypatch.setattr(runner, "find_encoder", lambda: None)

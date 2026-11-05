@@ -93,6 +93,7 @@ class EvalJob(BaseModel):
     # Every distinct code seen in this job, in order: backend, engine, attempt blockers, plan
     # review, failed model calls. Nothing is merged into a single cause.
     error_codes: list[str]
+    browser_attempts: int  # browser reproduction attempts in the stored result
     result_available: bool  # stored engine result (false after retention purge or no result)
     report_md_available: bool
     plan_review: dict | None  # {enabled, status, error_code}
@@ -129,3 +130,22 @@ class EvalRecord(BaseModel):
     error_codes: list[str]
     report_url: str
     jobs: list[EvalJob]
+
+
+class EvalTotals(BaseModel):
+    reports: int  # tagged reports (each slot once)
+    duplicate_submissions: int
+    qa_jobs: int
+    retests: int
+    model_calls: int
+    model_calls_usage_unknown: int
+    browser_attempts: int
+    report_files: int  # jobs with a stored report.md
+    outcomes: dict[str, int]
+
+
+class EvalExport(BaseModel):
+    eval_run_id: str
+    generated_at: datetime
+    totals: EvalTotals
+    items: list[EvalRecord]

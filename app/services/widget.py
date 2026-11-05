@@ -55,6 +55,11 @@ def widget_daily_limit(program: Program) -> int:
     return max(1, program.daily_job_limit // 2)
 
 
+# Over the cap reports are parked (stored, no job). Parking still costs storage, so anonymous
+# traffic also has an absolute daily ceiling on stored widget reports.
+WIDGET_STORE_MULTIPLIER = 4
+
+
 def config_limits() -> dict:
     return {
         "max_screenshot_bytes": MAX_SCREENSHOT_BYTES,
@@ -303,7 +308,12 @@ async def submit_report(
             # gets the same 201 either way, so the customer's quota state does not leak.
             day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
             today = await db.scalar(repo.count_since(program.id, day_start))
-            over_cap = today >= widget_daily_limit(program)
+            cap = widget_daily_limit(program)
+            if today >= cap * WIDGET_STORE_MULTIPLIER:
+                raise ApiError(
+                    429, "WIDGET_DAILY_LIMITED", "오늘은 더 이상 신고를 받을 수 없습니다."
+                )
+            over_cap = today >= cap
             fp = None
             if body.error_type != "manual":
                 fp = fingerprint(program.id, body, context, page_path)

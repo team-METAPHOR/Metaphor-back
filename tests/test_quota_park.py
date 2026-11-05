@@ -77,6 +77,23 @@ async def test_widget_over_daily_cap_is_parked_and_does_not_leak(client, db_sess
     assert audit.detail == {"reason": "quota", "code": "WIDGET_DAILY_LIMITED"}
 
 
+async def test_widget_parking_has_a_hard_daily_storage_ceiling(client, db_session, world):
+    """Parked reports still use storage, so anonymous traffic gets an absolute daily ceiling."""
+    from app.services.widget import WIDGET_STORE_MULTIPLIER
+
+    await set_limit(db_session, world, 2)  # widget cap max(1, 2 // 2) == 1
+    ceiling = 1 * WIDGET_STORE_MULTIPLIER
+    for i in range(ceiling):
+        assert (await post(client, world["key"], payload(title=f"t{i}"))).status_code == 201
+    response = await post(client, world["key"], payload(title="over"))
+    assert (response.status_code, response.json()["error"]["code"]) == (
+        429,
+        "WIDGET_DAILY_LIMITED",
+    )
+    stored = await db_session.scalar(select(func.count()).select_from(Report))
+    assert stored == ceiling
+
+
 async def test_widget_over_program_job_limit_is_parked(client, db_session, world):
     await set_limit(db_session, world, 4)  # widget cap 2; three platform jobs leave one slot
     for i in range(3):

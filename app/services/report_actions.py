@@ -1,7 +1,7 @@
 """What a person must do before a report can move on (`required_actions`), and a plain-text
 summary of the latest engine attempt (`best_attempt`).
 
-Only codes the engine (core_engine 426b3da) or our worker actually emit are mapped; anything
+Only codes the engine (core_engine 38bbf5b) or our worker actually emit are mapped; anything
 else yields no action rather than a guess.
 """
 
@@ -92,6 +92,8 @@ CODE_ACTIONS = {
     "MODEL_HTTP_ERROR": "RETRY_PROVIDER_LATER",
     "MODEL_AUTH_FAILED": "OPERATOR_CHECK_PROVIDER",
     "MODEL_RESPONSE_TOO_LARGE": "OPERATOR_CHECK_PROVIDER",
+    # 413: one request is over the provider size limit; resending the same one fails again.
+    "MODEL_REQUEST_TOO_LARGE": "OPERATOR_CHECK_PROVIDER",
 }
 
 # Display order when several apply.

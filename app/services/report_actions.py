@@ -1,7 +1,7 @@
 """What a person must do before a report can move on (`required_actions`), and a plain-text
 summary of the latest engine attempt (`best_attempt`).
 
-Only codes the engine (core_engine 4a710f0) or our worker actually emit are mapped; anything
+Only codes the engine (core_engine e396348) or our worker actually emit are mapped; anything
 else yields no action rather than a guess.
 """
 
@@ -20,6 +20,9 @@ ACTION_MESSAGES = {
     "VERIFY_ORIGIN": "테스트 대상 도메인의 소유 확인이 필요합니다",
     "WAIT_FOR_QUOTA": "오늘 실행 한도에 도달해 한도가 풀리면 다시 시도합니다",
     "TEST_ACCOUNT_REQUIRED": "테스트 계정을 등록하면 다시 시도합니다",
+    "CHECK_TEST_ACCOUNT": (
+        "등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요"
+    ),
     "CHECK_TARGET_URL": "테스트 대상 URL과 허용 범위를 확인해 주세요",
     "ANSWER_QUESTIONS": "추가 질문에 답하면 다시 검증합니다",
     "WAIT_FOR_PROVIDER": "AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요",
@@ -31,6 +34,14 @@ CODE_ACTIONS = {
     # Worker (app/worker/runner.py): the program's test session secret is missing or malformed.
     "SESSION_SECRET_MISSING": "TEST_ACCOUNT_REQUIRED",
     "SESSION_SECRET_INVALID": "TEST_ACCOUNT_REQUIRED",
+    # Worker (app/worker/test_accounts.py): the saved account cannot be opened (sealed for
+    # another key/program, or the worker key is missing) — save it again / operator key fix.
+    "TEST_ACCOUNT_INVALID": "TEST_ACCOUNT_REQUIRED",
+    "TEST_ACCOUNT_KEY_MISSING": "TEST_ACCOUNT_REQUIRED",
+    "TEST_ACCOUNT_KEY_INVALID": "TEST_ACCOUNT_REQUIRED",
+    # Engine form login (0.4.0): wrong account, form mismatch or no success signal. Job
+    # error_code on the first exploration, run.evidence[].blocker on a reproduction attempt.
+    "LOGIN_FAILED": "CHECK_TEST_ACCOUNT",
     # Engine RunPolicy / browser session: the target is outside scope or cannot be opened.
     "ORIGIN_OUT_OF_SCOPE": "CHECK_TARGET_URL",
     "PATH_OUT_OF_SCOPE": "CHECK_TARGET_URL",

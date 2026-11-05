@@ -27,6 +27,22 @@ class ProgramTestAccount(Base):
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     login_id_masked: Mapped[str] = mapped_column(String(300))
     login_path: Mapped[str | None] = mapped_column(String(2048))
+    # Where the login form posts (default: login_path) and how the engine confirms success.
+    submit_path: Mapped[str | None] = mapped_column(String(2048))
+    success_path: Mapped[str | None] = mapped_column(String(2048))
+    success_selector: Mapped[str | None] = mapped_column(String(256))
     updated_by: Mapped[str | None] = fk("users.id", nullable=True, index=False)
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()
+
+    @property
+    def login_ready(self) -> bool:
+        """The engine can sign in with it: a login path and an explicit success signal."""
+        return bool(self.login_path and (self.success_path or self.success_selector))
+
+
+def login_applies(test_context_id: str, session_secret_ref: str | None) -> bool:
+    """Whether a run in this context signs in with the saved account. core_engine 0.4.0 needs
+    an explicit (non-anonymous) test context and refuses to mix a login with fixed headers,
+    so an operator-provisioned session wins."""
+    return test_context_id != "anonymous" and session_secret_ref is None

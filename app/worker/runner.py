@@ -21,6 +21,7 @@ from core_engine import (
     ConditionsService,
     GroqModel,
     JobStore,
+    LoginOptions,
     OpenAIModel,
     QARequest,
     QAService,
@@ -31,6 +32,7 @@ from core_engine.video import find_encoder
 from psycopg.rows import dict_row
 
 from app.integrations import storage
+from app.models.test_account import login_applies
 from app.worker import conditions as matrix
 from app.worker import queue
 from app.worker.main import sync_database_url
@@ -151,7 +153,12 @@ def build_policy(snapshot: dict) -> RunPolicy:
 
 
 def build_service(
-    snapshot: dict, store: JobStore, model, app_version: str | None, reviewer=None
+    snapshot: dict,
+    store: JobStore,
+    model,
+    app_version: str | None,
+    reviewer=None,
+    login: LoginOptions | None = None,
 ) -> QAService:
     policy = build_policy(snapshot)
     options = BrowserOptions(
@@ -164,8 +171,10 @@ def build_service(
         session_headers=load_session_headers(
             snapshot["org_id"], snapshot.get("session_secret_ref")
         ),
-        # ponytail: a saved program test account (app/worker/test_accounts.load_test_account)
-        # plugs in here once the engine can log in with id/password; until then it is unused.
+        # The saved program test account signs in before every attempt (engine 0.4.0).
+        login=login
+        if login_applies(snapshot["test_context_id"], snapshot.get("session_secret_ref"))
+        else None,
     )
     return QAService(model, policy, store, options=options, reviewer=reviewer)
 
@@ -392,19 +401,30 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
 
     store = BoundJobStore(root, bind)
     model = model or OpenAIModel.from_env()
+    login = None
+    if any(
+        login_applies(c["test_context_id"], c.get("session_secret_ref"))
+        for c in conditions or [snapshot]
+    ):
+        # Lazy: test_accounts imports JobInputError from this module.
+        from app.worker.test_accounts import load_login
+
+        login = load_login(conn, program["id"])
     if conditions:
         service = ConditionsService(
             model,
             build_policy(snapshot),
             store,
-            matrix.build_conditions(snapshot, job["app_version"], load_session_headers),
+            matrix.build_conditions(
+                snapshot, job["app_version"], load_session_headers, login=login
+            ),
             reviewer=reviewer,
             limits=ConditionLimits(max_conditions=snapshot["max_conditions"]),
         )
         reset = matrix.condition_reset(snapshot, RESETS)
         contexts = sorted({c["test_context_id"] for c in conditions})
     else:
-        service = build_service(snapshot, store, model, job["app_version"], reviewer)
+        service = build_service(snapshot, store, model, job["app_version"], reviewer, login)
         contexts = [snapshot["test_context_id"]]
 
     # Jobs sharing a synthetic account/data set run one at a time. A matrix job holds every

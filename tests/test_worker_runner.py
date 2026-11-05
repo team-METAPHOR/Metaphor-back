@@ -404,3 +404,84 @@ async def test_misconfigured_critic_fails_job_before_model_call(db_session, conn
     job = await job_row(db_session, job_id)
     assert (job.status, job.backend_error_code) == ("failed", "CRITIC_CONFIG_INVALID")
     assert model.calls == []
+
+
+async def test_saved_test_account_signs_in_and_never_persists(db_session, conn, monkeypatch):
+    from app.core import test_account_crypto as crypto
+    from app.models import ProgramTestAccount
+    from app.worker.test_accounts import PRIVATE_KEY_ENV
+
+    password = "Pw-NEVER-STORED-913"
+    program, job_id = await queued_job(db_session, conn, test_context_id="member-1")
+    private_pem, public_pem = crypto.generate_keypair()
+    sealed = crypto.seal(
+        crypto.load_public_key(public_pem),
+        program.id,
+        1,
+        crypto.Credentials(login_id="qa-login@example.com", password=password),
+    )
+    db_session.add(
+        ProgramTestAccount(
+            program_id=program.id,
+            version=1,
+            key_id=sealed.key_id,
+            wrapped_key=sealed.wrapped_key,
+            ciphertext=sealed.ciphertext,
+            login_id_masked="qa-***@example.com",
+            login_path="/login",
+            success_path="/home",
+        )
+    )
+    await db_session.commit()
+    monkeypatch.setenv(PRIVATE_KEY_ENV, private_pem)
+    captured = {}
+    original = runner.build_service
+
+    def spy(*args, **kwargs):
+        service = original(*args, **kwargs)
+        captured["login"] = service.options.login
+        return service
+
+    monkeypatch.setattr(runner, "build_service", spy)
+    await asyncio.to_thread(runner.execute_job, job_id, model=ScriptedModel([intake("needs_info")]))
+    login = captured["login"]
+    assert (login.login_id, login.password, login.login_path, login.success_path) == (
+        "qa-login@example.com",
+        password,
+        "/login",
+        "/home",
+    )
+    assert (await job_row(db_session, job_id)).status == "needs_info"
+    dump = conn.execute(
+        "SELECT (SELECT raw::text FROM qa_results WHERE job_id = %(j)s) || "
+        "(SELECT string_agg(detail::text, '') FROM job_events WHERE job_id = %(j)s) || "
+        "(SELECT scope_snapshot::text FROM validation_jobs WHERE id = %(j)s)",
+        {"j": job_id},
+    ).fetchone()[0]
+    assert password not in dump and "qa-login@example.com" not in dump
+
+
+def test_conditions_sign_in_only_where_login_applies():
+    from core_engine import LoginOptions
+
+    from app.worker import conditions as matrix
+
+    login = LoginOptions(login_path="/login", login_id="u1", password="p1", success_path="/home")
+    base = {
+        "label": "c",
+        "width": 1280,
+        "height": 720,
+        "browser_name": "chromium",
+        "record_video": False,
+        "response_delay_ms": 0,
+    }
+    snapshot = {
+        "app_version": "v1",
+        "org_id": "o1",
+        "conditions": [
+            {**base, "condition_id": "a", "test_context_id": "member-1"},
+            {**base, "condition_id": "b", "test_context_id": "anonymous"},
+        ],
+    }
+    built = matrix.build_conditions(snapshot, None, lambda org, ref: {}, login=login)
+    assert [c.options.login for c in built] == [login, None]

@@ -63,7 +63,9 @@ def site():
 
 @pytest.fixture(autouse=True)
 def ip_secret(monkeypatch):
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "test-ip-secret")
+    monkeypatch.setattr(
+        get_settings(), "ip_hash_secret", "test-ip-secret-0123456789abcdef0123456789"
+    )
 
 
 async def seeded(client, db_session, *, verified=False, **revision):
@@ -193,14 +195,15 @@ async def test_verify_refuses_private_ip_and_redirects(client, db_session, site,
     def fake_resolve(host, port, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (resolved[host], port))]
 
-    monkeypatch.setattr(origin_verification, "resolver", fake_resolve)
-    for host in resolved:
-        await patch_scope(client, world, base_url=f"https://{host}")
-        assert_failed(await check(client, world), "PRIVATE_ADDRESS")
-    # Link-local (cloud metadata) stays blocked even with operator private-target approval.
-    meta = await seeded(client, db_session, base_url="https://meta.example.com", **LOOPBACK)
-    assert_failed(await check(client, meta), "PRIVATE_ADDRESS")
-    monkeypatch.undo()
+    # Only the resolver is patched here; monkeypatch.undo() would also drop the hash secret.
+    with monkeypatch.context() as m:
+        m.setattr(origin_verification, "resolver", fake_resolve)
+        for host in resolved:
+            await patch_scope(client, world, base_url=f"https://{host}")
+            assert_failed(await check(client, world), "PRIVATE_ADDRESS")
+        # Link-local (cloud metadata) stays blocked even with operator private-target approval.
+        meta = await seeded(client, db_session, base_url="https://meta.example.com", **LOOPBACK)
+        assert_failed(await check(client, meta), "PRIVATE_ADDRESS")
 
     # Redirects are never followed.
     world = await seeded(client, db_session, base_url=base, **LOOPBACK)

@@ -27,8 +27,10 @@ async def signup(body: SignupRequest, db: DbSession, request: Request) -> UserRe
 
 
 @router.post("/login", response_model=UserResponse)
-async def login(body: LoginRequest, db: DbSession, response: Response) -> UserResponse:
-    user, token = await auth.login(db, body.email, body.password)
+async def login(
+    body: LoginRequest, db: DbSession, request: Request, response: Response
+) -> UserResponse:
+    user, token = await auth.login(db, body.email, body.password, client_ip(request))
     response.set_cookie(
         SESSION_COOKIE,
         token,

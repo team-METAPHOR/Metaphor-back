@@ -7,6 +7,7 @@ from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision
 from app.repositories import programs as repo
+from app.repositories import test_accounts as test_accounts_repo
 from app.repositories import test_conditions as conditions_repo
 from app.schemas.program import SCOPE_FIELDS, ProgramCreate, ProgramPatch
 from app.services.access import ADMIN_ROLES, org_role, require_org_role
@@ -161,6 +162,16 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
             else:
                 # Condition sessions are bound to the old origin too.
                 await conditions_repo.unbind_sessions(db, program.id)
+                # So is a saved test account: never send its credentials to a new site.
+                if await test_accounts_repo.remove(db, program.id):
+                    await record_audit(
+                        db,
+                        actor_id=user_id,
+                        org_id=program.owner_org_id,
+                        action="program.test_account_delete",
+                        target=program.id,
+                        detail={"reason": "base_url_changed"},
+                    )
             if _scope_values(candidate) == _scope_values(revision):
                 candidate = None
 

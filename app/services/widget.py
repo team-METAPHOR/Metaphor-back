@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.core.hashing import keyed_hash
+from app.core.hashing import CLIENT_IP, keyed_hash
 from app.core.text import redact, sanitize_text
 from app.models import Program, ProgramScopeRevision, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
@@ -114,7 +114,7 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
 
 
 def ip_hash(ip: str) -> str:
-    hashed = keyed_hash(ip)
+    hashed = keyed_hash(CLIENT_IP, ip)
     if hashed is None:
         raise ApiError(503, "WIDGET_UNAVAILABLE", "위젯 신고를 일시적으로 받을 수 없습니다.")
     return hashed

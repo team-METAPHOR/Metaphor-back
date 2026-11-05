@@ -6,6 +6,7 @@ from sqlalchemy import select, update
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.models import AuditEvent, Membership, Organization, Session, User
+from app.services import auth as auth_service
 from app.services.access import deactivate_membership, org_role, require_org_role
 from app.services.auth import (
     change_password,
@@ -249,16 +250,48 @@ async def test_login_throttled_after_5_failures_429(client, db_session):
     await signup(client)
     for _ in range(5):
         assert (await login(client, password="wrong-password-123")).status_code == 401
-    throttled = await login(client)  # correct password, still blocked for 15 minutes
+    throttled = await login(client)  # same IP + email: blocked even with the right password
     assert throttled.status_code == 429
     assert throttled.json()["error"]["code"] == "LOGIN_THROTTLED"
     failed = AuditEvent.action == "auth.login_failed"
     targets = (await db_session.scalars(select(AuditEvent.target).where(failed))).all()
-    assert len(targets) == 5
-    assert all(t and "@" not in t and len(t) == 64 for t in targets)  # sha256, never raw email
+    assert len(targets) == 10  # one IP+email row and one account row per failure
+    assert all(t and "@" not in t and len(t) == 64 for t in targets)  # HMAC, never raw email
     # Another account is unaffected.
     await signup(client, email="other@example.com")
     assert (await login(client, email="other@example.com")).status_code == 200
+
+
+async def test_failures_from_other_ips_do_not_lock_account(client, db_session):
+    await signup(client)
+    for i in range(20):
+        with pytest.raises(ApiError) as bad:
+            await auth_service.login(
+                db_session, "dev@example.com", "wrong-pw-123", f"203.0.113.{i}"
+            )
+        assert bad.value.code == "INVALID_CREDENTIALS"
+    user, _ = await auth_service.login(db_session, "dev@example.com", PASSWORD, "198.51.100.7")
+    assert user.email == "dev@example.com"
+
+
+async def test_account_wide_limit_blocks_distributed_guessing(client, db_session, monkeypatch):
+    monkeypatch.setattr(auth_service, "LOGIN_ACCOUNT_MAX_FAILURES", 3)
+    for i in range(3):
+        with pytest.raises(ApiError):
+            await auth_service.login(db_session, "nobody@example.com", "wrong-pw", f"10.0.0.{i}")
+    with pytest.raises(ApiError) as throttled:
+        await auth_service.login(db_session, "nobody@example.com", "wrong-pw", "10.0.0.9")
+    assert throttled.value.code == "LOGIN_THROTTLED"  # unknown email: same as a real account
+
+
+async def test_successful_login_clears_failures(client):
+    await signup(client)
+    for _ in range(4):
+        assert (await login(client, password="wrong-password-123")).status_code == 401
+    assert (await login(client)).status_code == 200
+    for _ in range(4):
+        assert (await login(client, password="wrong-password-123")).status_code == 401
+    assert (await login(client)).status_code == 200
 
 
 async def test_login_failures_outside_window_do_not_count(client, db_session):
@@ -302,7 +335,7 @@ async def test_concurrent_failures_cannot_exceed_limit(client, db_session):
     )
     assert sorted(r.status_code for r in results) == [401] * 5 + [429] * 5
     failed = AuditEvent.action == "auth.login_failed"
-    assert len((await db_session.scalars(select(AuditEvent.id).where(failed))).all()) == 5
+    assert len((await db_session.scalars(select(AuditEvent.id).where(failed))).all()) == 10
 
 
 NEW_PASSWORD = "brand-new-password-789"

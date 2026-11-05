@@ -68,6 +68,8 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           cd /home/ubuntu/metaphor-back
           uv sync --locked
+          # Schema first: new code may need columns from the new revision.
+          uv run alembic upgrade head
           sudo /usr/bin/systemctl restart metaphor-back.service
           REMOTE
 

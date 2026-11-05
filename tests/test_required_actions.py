@@ -92,6 +92,7 @@ async def test_viewer_reads_required_actions_and_best_attempt(client, db_session
         ("error_code", "MODEL_TIMEOUT", "RETRY_PROVIDER_LATER"),
         ("error_code", "MODEL_AUTH_FAILED", "OPERATOR_CHECK_PROVIDER"),
         ("error_code", "MODEL_RESPONSE_TOO_LARGE", "OPERATOR_CHECK_PROVIDER"),
+        ("error_code", "MODEL_REQUEST_TOO_LARGE", "OPERATOR_CHECK_PROVIDER"),
     ],
 )
 async def test_job_error_codes_map_to_actions(client, db_session, world, column, code, expected):

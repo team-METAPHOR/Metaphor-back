@@ -171,6 +171,7 @@ PROVIDER_ERROR_CODES = frozenset(
         "MODEL_UNAVAILABLE",
         "MODEL_HTTP_ERROR",
         "MODEL_RESPONSE_TOO_LARGE",
+        "MODEL_REQUEST_TOO_LARGE",
     }
 )
 NOTE_HEADER = "[이전 재현 시도] 아래 계획은 결론을 내지 못했습니다. 다른 해석·경로로 시도하세요."

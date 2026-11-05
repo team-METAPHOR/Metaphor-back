@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +13,12 @@ from app.core.ids import new_id
 from app.core.text import redact, redact_tree
 from app.integrations import storage
 
-_KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json"}
+logger = logging.getLogger(__name__)
+_KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json", ".webm": "video"}
+SPEC_FILE = "reproduction.spec.ts"
+# Stored byte-for-byte: the engine masks video frames before encoding and builds the test from
+# the scope-checked plan, and text redaction would change an executable test.
+_VERBATIM = {"video", "playwright_spec"}
 # Engine inputs that resume/retest replay. request.json text was redacted at intake and its
 # entry_url query must survive; scenario.json's plan is digest-checked, so only the rest of it
 # is redacted.
@@ -23,6 +29,23 @@ _KEEP_KEYS = {"scenario.json": ("plan",)}
 def normalize(raw: dict) -> dict:
     """JSON round-trip (enums → str, tuples → lists) so what we store equals what we serve."""
     return json.loads(json.dumps(raw, default=str))
+
+
+def artifact_kind(path: Path) -> str | None:
+    if path.name == SPEC_FILE:
+        return "playwright_spec"
+    return _KINDS.get(path.suffix)
+
+
+def reported_hashes(report: dict) -> dict[str, str]:
+    """Engine-reported sha256 per media file name (videos[] and test_export)."""
+    items = [video.get("artifact") for video in report.get("videos") or []]
+    items.append((report.get("test_export") or {}).get("artifact"))
+    return {
+        item["name"]: item["sha256"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("sha256")
+    }
 
 
 def redact_file(path: Path) -> bytes:
@@ -95,7 +118,9 @@ def persist_result(
 ) -> bool:
     """Apply the engine result if the job is still active. Returns False (and writes nothing)
     when the job already reached a terminal state elsewhere — a result never overwrites one."""
-    raw = redact_tree(normalize(raw))
+    raw = normalize(raw)
+    expected_hashes = reported_hashes(raw.get("report") or {})
+    raw = redact_tree(raw)
     report = raw.get("report") or {}
     run = report.get("run") or {}
     verdict = run.get("verdict") or {}
@@ -146,10 +171,18 @@ def persist_result(
             )
         expires = datetime.now(UTC) + timedelta(days=retention_days)
         for path in sorted(engine_dir.iterdir()):
-            kind = _KINDS.get(path.suffix)
+            kind = artifact_kind(path)
             if kind is None or not path.is_file() or path.is_symlink():
                 continue
-            data = redact_file(path)
+            if kind in _VERBATIM:
+                data = path.read_bytes()
+                expected = expected_hashes.get(path.name)
+                if expected and hashlib.sha256(data).hexdigest() != expected:
+                    # Kind only: the file name embeds a hash and adds nothing for operators.
+                    logger.warning("artifact hash mismatch for job %s: %s skipped", job_id, kind)
+                    continue
+            else:
+                data = redact_file(path)
             conn.execute(
                 "INSERT INTO artifacts (id, org_id, report_id, job_id, kind, storage_key, sha256, "
                 "size, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",

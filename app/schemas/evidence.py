@@ -143,5 +143,42 @@ class ArtifactItem(BaseModel):
     created_at: datetime
 
 
+class VideoMedia(BaseModel):
+    """One engine attempt's masked screen recording. `artifact_id` is set only for a stored,
+    hash-verified, unexpired file; status says why there is none (failed, unavailable, ...)."""
+
+    attempt: int | None
+    revision: int | None
+    plan_sha256: str | None
+    status: str
+    truncated: bool
+    capture_error: str | None
+    has_audio: bool
+    sampling_fps: int | None
+    frames_captured: int | None
+    start_offset_seconds: float | None
+    duration_seconds: float | None
+    artifact_id: str | None
+
+
+class ExportedTestMedia(BaseModel):
+    status: str
+    plan_sha256: str | None
+    artifact_id: str | None
+    required_environment: list[str]
+    error_code: str | None
+
+
+class JobMedia(BaseModel):
+    """`video_enabled` is null while the job runs or once its result is gone (retention)."""
+
+    video_enabled: bool | None
+    videos: list[VideoMedia]
+    test_export: ExportedTestMedia | None
+    # The engine produces no Playwright trace/HAR; never offered as available.
+    trace_available: Literal[False] = False
+
+
 class ArtifactList(BaseModel):
     items: list[ArtifactItem]
+    media: JobMedia

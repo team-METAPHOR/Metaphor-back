@@ -25,6 +25,7 @@ from core_engine import (
     RunPolicy,
     Screenshot,
 )
+from core_engine.video import find_encoder
 from psycopg.rows import dict_row
 
 from app.integrations import storage
@@ -114,6 +115,26 @@ def build_reviewer():
         raise JobInputError("CRITIC_CONFIG_INVALID") from None
 
 
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def video_enabled() -> bool:
+    """Operator switch (`QA_VIDEO_ENABLED`, worker env only). Off unless explicitly set."""
+    return os.environ.get("QA_VIDEO_ENABLED", "").strip().lower() in _TRUE
+
+
+def check_video_encoder() -> bool:
+    """Worker start check: with video on, an encoder must be found. A missing encoder is logged
+    with a stable code; jobs still run and the engine marks each video `unavailable`."""
+    if not video_enabled() or find_encoder():
+        return True
+    logger.error(
+        "VIDEO_ENCODER_UNAVAILABLE: QA_VIDEO_ENABLED is set but no ffmpeg was found "
+        "(set FFMPEG_BINARY or install the core engine video extra)"
+    )
+    return False
+
+
 def build_service(
     snapshot: dict, store: JobStore, model, app_version: str | None, reviewer=None
 ) -> QAService:
@@ -132,6 +153,7 @@ def build_service(
         app_version=app_version or snapshot["app_version"],
         test_context_id=snapshot["test_context_id"],
         mask_selectors=tuple(snapshot.get("mask_selectors", ())),
+        record_video=video_enabled(),
         session_headers=load_session_headers(
             snapshot["org_id"], snapshot.get("session_secret_ref")
         ),

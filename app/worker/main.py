@@ -109,7 +109,8 @@ def run_forever(target: Callable[[str], None], *, idle_seconds: float = 1.0) -> 
 
 if __name__ == "__main__":
     from app.core.logging import configure_logging
-    from app.worker.runner import run_job  # added by the engine-runner task
+    from app.worker.runner import check_video_encoder, run_job
 
     configure_logging()
+    check_video_encoder()
     run_forever(run_job)

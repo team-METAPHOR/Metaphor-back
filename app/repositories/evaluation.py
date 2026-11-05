@@ -7,6 +7,7 @@ from app.models import (
     Artifact,
     AuditEvent,
     JobEvent,
+    ModelUsage,
     QaResult,
     Report,
     ReportEvalTag,
@@ -128,3 +129,13 @@ async def run_reports(
         .limit(limit)
     )
     return [(report, tag) for report, tag in rows]
+
+
+async def model_usage_for(db: AsyncSession, job_ids: list[str]) -> dict[str, list[ModelUsage]]:
+    rows = await db.scalars(
+        select(ModelUsage).where(ModelUsage.job_id.in_(job_ids)).order_by(ModelUsage.id)
+    )
+    out: dict[str, list[ModelUsage]] = {}
+    for row in rows:
+        out.setdefault(row.job_id, []).append(row)
+    return out

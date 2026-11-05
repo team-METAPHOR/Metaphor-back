@@ -42,7 +42,7 @@ from app.integrations import storage
 from app.integrations.state_changes import state_change_policy
 from app.models.test_account import login_applies
 from app.worker import conditions as matrix
-from app.worker import live, queue
+from app.worker import live, queue, readiness
 from app.worker.main import sync_database_url
 from app.worker.persist import persist_result, sync_events
 from app.worker.resets import RESETS, STATEFUL, ResetConfigError
@@ -524,6 +524,21 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         contexts = [snapshot["test_context_id"]]
     locks = sorted(
         {*locks, *(context_lock_key(snapshot["org_id"], context) for context in contexts)}
+    )
+    readiness.record(
+        conn,
+        job_id,
+        readiness.build(
+            job,
+            snapshot,
+            model=model,
+            reviewer=reviewer,
+            service=service,
+            browser_limits=BROWSER_LIMITS,
+            login_configured=login is not None,
+            approved_adapter=approved_adapter,
+            conditions_service=bool(conditions),
+        ),
     )
 
     # Started before the context lock, so a viewer of a waiting job sees the relay alive.

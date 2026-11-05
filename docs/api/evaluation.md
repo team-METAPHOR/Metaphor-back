@@ -47,7 +47,7 @@ QA 작업은 `initial`·`fresh`·`resume`입니다. 수정 재검증(`retest`)�
 
 - **`processing_ms` = 신고 접수(`received_at` = `reports.created_at`) → 처음으로 `completed`된 QA 작업의 결과 저장(`report_ready_at`)**. `report_ready`일 때만 값이 있습니다.
 - 그 밖의 종료(`failed`·`timeout`·`cancelled`·`needs_info`·`inconclusive`)는 `ended_at`·`ended_ms`(접수 → 마지막 QA 작업 종료)에만 들어갑니다. 성공 건 시간과 섞지 않습니다. `unfinished`·`not_run`은 둘 다 `null`입니다.
-- `report_ready_at`은 `validation_jobs.finished_at`입니다. 워커가 결과·보고서(`report.md`)·스크린샷·영상·JSON 산출물을 **한 트랜잭션**으로 저장하므로, 이 트랜잭션이 커밋되면 보고서와 영상 등 부가 산출물이 함께 조회 가능해집니다. 영상만 늦게 붙는 경우는 없습니다. 이 값은 트랜잭션 시작 시각(PostgreSQL `now()`)이라 실제 커밋보다 산출물 저장 시간만큼 이를 수 있습니다(보통 1초 미만).
+- `report_ready_at`은 그 작업의 `report_readable_at`입니다. 워커가 결과·보고서(`report.md`)·스크린샷·영상·JSON 산출물을 **한 트랜잭션**으로 저장하고, 커밋 **직후** `clock_timestamp()`로 이 시각을 기록합니다. 그 순간부터 API가 보고서와 영상 등 부가 산출물을 함께 내려주며, 영상만 늦게 붙는 경우는 없습니다. 이 필드가 생기기 전에 저장된 작업은 `report_readable_at`이 `null`이라 `finished_at`(트랜잭션 시작 시각, 실제 커밋보다 1초 미만 이를 수 있음)을 대신 씁니다.
 - `retries` = QA 작업 수 − 1. 자동 재생성(`fresh`, 불확실 판정 뒤)은 작업의 `automatic: true`로 구분됩니다. `claims`는 같은 작업을 워커가 가져간 횟수입니다.
 - 위젯 중복 접수는 `duplicate_submissions`로만 보이고 QA 건수에 들어가지 않습니다.
 
@@ -61,16 +61,40 @@ QA 작업은 `initial`·`fresh`·`resume`입니다. 수정 재검증(`retest`)�
 | `model_ms` | 엔진이 잰 모델 호출 시간 합(`timings.model_seconds`) |
 | `browser_ms` | 브라우저 재현 시도 2회의 `elapsed_seconds` 합 |
 | `login_reset_ms` | 엔진이 따로 보고하지 않아 항상 `null`(unknown) |
-| `persist_ms` | 엔진 종료 → 결과 저장 |
-| `total_ms` | 작업 생성 → 결과 저장 |
+| `persist_ms` | 엔진 종료 → 보고서 조회 가능(`report_readable_at`, 없으면 `persisted_at`) |
+| `total_ms` | 작업 생성 → 보고서 조회 가능(같은 규칙) |
+
+`timing.persisted_at`은 결과 트랜잭션 시작(`finished_at`), `timing.report_readable_at`은 커밋 직후 시각입니다. 워커 오류처럼 결과를 저장하지 않은 종료는 `report_readable_at`이 `null`입니다.
 
 엔진이 결과를 내지 못한 실패(워커 오류, 리스 만료 `WORKER_LOST` 등)는 엔진 시각·모델 호출이 비어 있고 `result_available: false`입니다. 보존 기간이 지나 원시 결과가 지워진 작업도 `result_available: false`입니다.
+
+### 워커 준비 확인 스냅샷 (`jobs[].readiness`)
+
+워커가 엔진 실행을 시작할 때(claim 뒤, 실행 잠금·엔진 호출 전) **그 워커가 실제로 쓰는 설정**을 작업 행(`validation_jobs.readiness`)에 남깁니다. 레포 `main`과 배포 워커가 같다고 가정하지 않기 위해서입니다. 실행 전 입력 검사에서 실패한 작업(`RESET_ADAPTER_UNKNOWN` 등)과 이 기능 이전 작업은 `null`입니다.
+
+| 키 | 내용 |
+|---|---|
+| `engine` | `package_version`(워커 가상환경에 설치된 `metaphor-core-engine` 버전), `commit`(워커 코드의 `ENGINE_COMMIT`) |
+| `models.primary` / `models.critic` | `provider`(`openai`/`groq`), `model`(설정 모델 ID), `timeout_seconds`. 비판 모델이 없으면 `critic: null` |
+| `critic` | `configured_provider`(`QA_CRITIC_PROVIDER` 값, 비어 있으면 `null`), `enabled`(비판 모델을 실제로 만들었는지). 코드 주석이 아니라 이 운영 설정 하나로 켜고 끕니다 |
+| `limits` | `qa`(엔진 `QALimits`: 호출 수·수리·실행 시간·토큰·계획 수정), `conditions`(조건 매트릭스일 때 `ConditionLimits`), `browser`(`BROWSER_LIMITS`), `worker_hard_deadline_seconds`, `lease_seconds` |
+| `browser` | `name`, `width`, `height`, `step_timeout_ms`, `navigation_timeout_ms`, `record_video` (조건 매트릭스는 `conditions[]`에 조건별 브라우저·뷰포트) |
+| `scope` | `revision`(작업의 범위 리비전), `origin` |
+| `reset_adapter_id`, `state_changes_adapter_id` | 초기화 어댑터 ID와 쓰기 승인에 연결된 어댑터 ID(읽기 전용이면 `null`) |
+| `test_account` | `test_context_id`(역할), `login`(저장된 테스트 계정으로 로그인하는지), `session_reference`(세션 참조가 있는지) |
+
+API 키, 세션 헤더, 로그인 ID·비밀번호, 초기화 토큰, 제보 본문은 넣지 않습니다. 데모 서버의 health 커밋은 워커가 대상 서버를 따로 호출하지 않으므로 기록하지 않습니다(평가 실행 전에 별도로 확인).
+
+- `jobs[].critic_config_matches`: 스냅샷의 `critic.enabled`와 실제 실행의 `plan_review.enabled`가 같으면 `true`, 다르면 `false`, 어느 한쪽을 모르면 `null`. 비판 모델이 설정됐는데 단일 모델로 돌았다면 `false`로 드러납니다.
+- `totals.readiness_configs`: 스냅샷이 있는 작업들 사이의 서로 다른 설정 조합(엔진·모델·비판 모델·제한) 수. 평가 중 설정을 바꾸지 않았다면 1입니다.
+- CSV 열: `engine_version`, `engine_commit`, `primary_model`, `critic_model`, `critic_configured`, `critic_config_matches`(결과를 정한 작업 기준).
 
 ### 오류 코드와 모델 호출
 
 - `jobs[].error_codes`는 그 작업에서 나온 코드를 순서대로 모두 남깁니다: 워커(`backend_error_code`) → 엔진(`error_code`) → 재현 시도별 차단 코드(`TRANSPORT_ERROR`, `STEP_OR_READINESS_FAILED` 등) → 계획 검토 오류 → 실패한 모델 호출 상태 → 예산 거절(`model_limit_events[].error_code`). 공급자 429, 엔진 호출/토큰 상한(`MODEL_CALL_LIMIT`·`MODEL_TOKEN_LIMIT`), 브라우저 실패를 하나로 합치지 않습니다. 제보의 `error_codes`는 QA 작업 전체의 합집합입니다.
 - `jobs[].model_calls[]`: `phase`, `role`(primary/critic), `status`, `model`(공급자가 돌려준 실제 모델 ID, 실패 시 `null`), `configured_model`(엔진 0.7.0이 기록한 워커 설정 모델 ID. 실패 호출에도 있음, 이전 결과는 `null`), `usage_known`, `input_tokens`/`output_tokens`(사용량이 없으면 `null`, 0으로 취급하지 않음), `latency_ms`, `retry_after_seconds`(429의 Retry-After).
 - `jobs[].model_limit_events[]`(엔진 0.7.0): 작업별 호출·토큰 예산 때문에 **시작하지 않은** 호출(`phase`, `role`, `configured_model`, `error_code`=`MODEL_CALL_LIMIT`/`MODEL_TOKEN_LIMIT`, `call_started: false`). 실제 호출이 아니므로 `model_calls`·실패 호출 수·`totals.model_calls`에 넣지 않고 `totals.model_limit_events`와 CSV `model_limit_events` 열로 따로 셉니다.
+- `jobs[].model_calls_source`: `result`(저장된 엔진 결과) 또는 `model_usage`. 보존 기간이 지나 원시 결과가 지워져도 `model_usage` 행(단계, 역할, 상태, 실제·설정 모델, 토큰, `latency_ms`, `retry_after_seconds`)은 남으므로 모델 호출 목록을 그 행으로 채웁니다. 둘 다 없으면 `null`이고 목록은 비어 있습니다. 예산 거절은 `model_usage`에 저장하지 않습니다(실제 호출이 아님).
 - `plan_review`는 `{enabled, status, error_code}`만 보여 줍니다. 비판 모델 사용 여부는 이 `enabled`로 확인합니다.
 - 엔진 job id, 저장 경로, 범위 스냅샷, 모델 요청·응답 본문은 넣지 않습니다. 정제된 JSON 결과는 `result_url`, 증거 목록은 `artifacts_url`로 받습니다.
 

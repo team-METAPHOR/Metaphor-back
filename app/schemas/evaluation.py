@@ -70,14 +70,16 @@ class EvalTiming(BaseModel):
     engine_started_at: datetime | None  # first engine event
     engine_finished_at: datetime | None  # engine's terminal event
     persisted_at: datetime | None  # result transaction (validation_jobs.finished_at)
+    # Result committed and readable from the API (null on jobs persisted before #105 B).
+    report_readable_at: datetime | None
     queue_wait_ms: int | None  # queued → claimed
     setup_ms: int | None  # claimed → engine start (context lock, test account, browser setup)
     engine_ms: int | None  # engine start → engine end
     model_ms: int | None  # sum of model call latencies (engine timings.model_seconds)
     browser_ms: int | None  # sum of the browser attempts' elapsed time
     login_reset_ms: int | None = None  # not reported separately by the engine: unknown
-    persist_ms: int | None  # engine end → result persisted
-    total_ms: int | None  # queued → persisted
+    persist_ms: int | None  # engine end → readable (persisted when readable time unknown)
+    total_ms: int | None  # queued → readable (persisted when readable time unknown)
 
 
 class EvalCondition(BaseModel):
@@ -110,7 +112,13 @@ class EvalJob(BaseModel):
     plan_review: dict | None  # {enabled, status, error_code}
     timing: EvalTiming
     model_calls: list[EvalModelCall]
+    # "result" (stored engine result) or "model_usage" (kept after the retention purge).
+    model_calls_source: Literal["result", "model_usage"] | None
     model_limit_events: list[EvalModelLimitEvent] = []
+    # Worker readiness snapshot at run start (engine, models, critic switch, limits, browser).
+    readiness: dict | None
+    # Configured critic switch == the run's plan_review.enabled; null when either is unknown.
+    critic_config_matches: bool | None
     conditions: list[EvalCondition]
     result_url: str
     artifacts_url: str
@@ -152,6 +160,9 @@ class EvalTotals(BaseModel):
     model_calls: int
     model_calls_usage_unknown: int
     model_limit_events: int  # budget refusals (not calls)
+    # Distinct worker configurations (engine version/commit, models, critic, limits) among jobs
+    # with a readiness snapshot. More than 1 means the setup changed during the run.
+    readiness_configs: int
     browser_attempts: int
     report_files: int  # jobs with a stored report.md
     outcomes: dict[str, int]

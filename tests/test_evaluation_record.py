@@ -7,6 +7,7 @@ from app.models import (
     Artifact,
     AuditEvent,
     JobEvent,
+    ModelUsage,
     QaResult,
     Report,
     ReportEvalTag,
@@ -142,6 +143,7 @@ async def test_completed_report_timing_and_model_calls(client, db_session, world
         "engine_started_at": "2026-11-06T09:00:12Z",
         "engine_finished_at": "2026-11-06T09:00:58Z",
         "persisted_at": "2026-11-06T09:01:00Z",
+        "report_readable_at": None,
         "queue_wait_ms": 5000,
         "setup_ms": 5000,
         "engine_ms": 46000,
@@ -367,3 +369,82 @@ async def test_model_limit_events_are_kept_apart_from_calls(client, db_session, 
         }
     ]
     assert out["error_codes"] == ["MODEL_CALL_LIMIT"]
+
+
+READINESS = {
+    "schema_version": 1,
+    "engine": {"package_version": "0.7.0", "commit": "426b3da"},
+    "models": {
+        "primary": {"provider": "openai", "model": "gpt-5.4-mini", "timeout_seconds": 30},
+        "critic": {"provider": "groq", "model": "openai/gpt-oss-120b", "timeout_seconds": 30},
+    },
+    "critic": {"configured_provider": "groq", "enabled": True},
+    "limits": {"browser": {"max_concurrent_requests": 4}},
+}
+
+
+async def test_report_readable_time_is_the_ready_time(client, db_session, world):
+    job = await add_job(db_session, world, start=2, end=60, report_readable_at=at(60.5))
+    db_session.add_all(events(job, engine_start=12, engine_end=58))
+    await db_session.commit()
+    body = await record(client, world)
+    assert body["report_ready_at"].startswith("2026-11-06T09:01:00.5")
+    assert body["processing_ms"] == 60_500
+    timing = body["jobs"][0]["timing"]
+    assert timing["persisted_at"].startswith("2026-11-06T09:01:00Z")
+    assert timing["report_readable_at"].startswith("2026-11-06T09:01:00.5")
+    assert (timing["persist_ms"], timing["total_ms"]) == (2500, 58_500)
+
+
+async def test_readiness_and_critic_switch_check(client, db_session, world):
+    job = await add_job(db_session, world, readiness=READINESS)
+    review = {"enabled": False, "status": "skipped", "error_code": None}
+    db_session.add(QaResult(job_id=job.id, raw=raw(review=review)))
+    await db_session.commit()
+    (out,) = (await record(client, world))["jobs"]
+    assert out["readiness"] == READINESS
+    # Critic configured for the worker, but the job ran without it: flagged, never hidden.
+    assert out["critic_config_matches"] is False
+
+
+async def test_readiness_unknown_on_older_jobs(client, db_session, world):
+    await add_job(db_session, world)
+    await db_session.commit()
+    (out,) = (await record(client, world))["jobs"]
+    assert (out["readiness"], out["critic_config_matches"]) == (None, None)
+
+
+async def test_model_calls_fall_back_to_model_usage_after_purge(client, db_session, world):
+    job = await add_job(db_session, world, status="failed", error_code="MODEL_RATE_LIMITED")
+    db_session.add(
+        ModelUsage(
+            job_id=job.id,
+            org_id=world["org"].id,
+            phase="intake",
+            status="MODEL_RATE_LIMITED",
+            model=None,
+            role="primary",
+            configured_model="gpt-5.4-mini",
+            latency_ms=400,
+            retry_after_seconds=20.0,
+        )
+    )
+    await db_session.commit()
+    (out,) = (await record(client, world))["jobs"]
+    assert out["result_available"] is False
+    assert out["model_calls_source"] == "model_usage"
+    assert out["model_calls"] == [
+        {
+            "phase": "intake",
+            "role": "primary",
+            "status": "MODEL_RATE_LIMITED",
+            "model": None,
+            "configured_model": "gpt-5.4-mini",
+            "usage_known": False,
+            "input_tokens": None,
+            "output_tokens": None,
+            "latency_ms": 400,
+            "retry_after_seconds": 20.0,
+        }
+    ]
+    assert "MODEL_RATE_LIMITED" in out["error_codes"]

@@ -4,6 +4,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -88,6 +89,11 @@ class ValidationJob(Base):
     created_at: Mapped[datetime] = created_at()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Committed result is readable from the API (set right after the persist transaction).
+    report_readable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Worker readiness snapshot taken when the engine run starts (app/worker/readiness.py):
+    # engine version/commit, configured models, critic switch, limits, browser. No secrets.
+    readiness: Mapped[dict | None] = mapped_column(JSONB)
 
     @property
     def has_conditions(self) -> bool:
@@ -165,6 +171,10 @@ class ModelUsage(Base):
     phase: Mapped[str] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(String(64))
     model: Mapped[str | None] = mapped_column(String(100))
+    role: Mapped[str | None] = mapped_column(String(20))  # primary / critic
+    configured_model: Mapped[str | None] = mapped_column(String(200))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    retry_after_seconds: Mapped[float | None] = mapped_column(Float)
     # NULL = not reported by the provider; never treat as zero cost.
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)

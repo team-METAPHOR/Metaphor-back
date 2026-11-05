@@ -1,16 +1,17 @@
-"""Self-serve organizations: create, read, rename."""
+"""Self-serve organizations: create, read, rename, and member management."""
 
 import hashlib
 import json
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ApiError
 from app.core.ids import new_id
-from app.models import Membership, Organization
+from app.models import Membership, Organization, User
 from app.models.identity import MEMBERSHIP_ROLES
 from app.repositories import orgs as repo
-from app.schemas.org import OrgDetail, OrgResponse
-from app.services.access import require_org_role
+from app.schemas.org import MemberResponse, OrgDetail, OrgResponse
+from app.services.access import deactivate_membership, require_org_role
 from app.services.audit import count_actions, record_audit
 from app.services.idempotency import run_once
 from app.services.limits import enforce_rate_limit, lock_key, since
@@ -82,3 +83,86 @@ async def rename_org(db: AsyncSession, user_id: str, org_id: str, name: str) -> 
                 db, actor_id=user_id, org_id=org.id, action="org.update", target=org.id
             )
         return await _detail(db, org, role)
+
+
+def _member(membership: Membership, user: User) -> MemberResponse:
+    return MemberResponse(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        role=membership.role,
+        is_active=membership.is_active,
+        joined_at=membership.created_at,
+    )
+
+
+async def list_members(db: AsyncSession, user_id: str, org_id: str) -> list[MemberResponse]:
+    """Every member sees active members; admins also see deactivated ones."""
+    async with db.begin():
+        role = await require_org_role(db, user_id, org_id, *MEMBERSHIP_ROLES)
+        rows = await repo.list_members(db, org_id, include_inactive=role == "admin")
+        return [_member(m, u) for m, u in rows]
+
+
+async def _lock_org(db: AsyncSession, org_id: str) -> None:
+    """Row-lock the org so concurrent role changes/removals count admins one at a time."""
+    if await repo.get(db, org_id, for_update=True) is None:
+        raise ApiError(404, "NOT_FOUND", "Not found")
+
+
+async def _active_member(db: AsyncSession, org_id: str, user_id: str) -> Membership:
+    membership = await repo.get_membership(db, org_id, user_id)
+    if membership is None or not membership.is_active:
+        raise ApiError(404, "NOT_FOUND", "멤버를 찾을 수 없습니다.")
+    return membership
+
+
+async def _ensure_not_last_admin(db: AsyncSession, membership: Membership) -> None:
+    if membership.role == "admin" and await repo.count_active_admins(db, membership.org_id) <= 1:
+        raise ApiError(409, "LAST_ADMIN", "회사에는 활성 관리자가 한 명 이상 있어야 합니다.")
+
+
+async def change_member_role(
+    db: AsyncSession, actor_id: str, org_id: str, user_id: str, role: str
+) -> MemberResponse:
+    async with db.begin():
+        # Lock before the role check: a concurrent demotion of the actor must be seen.
+        await require_org_role(db, actor_id, org_id, *MEMBERSHIP_ROLES)
+        await _lock_org(db, org_id)
+        await require_org_role(db, actor_id, org_id, "admin")
+        membership = await _active_member(db, org_id, user_id)
+        if membership.role != role:
+            if role != "admin":
+                await _ensure_not_last_admin(db, membership)
+            previous, membership.role = membership.role, role
+            await db.flush()
+            await record_audit(
+                db,
+                actor_id=actor_id,
+                org_id=org_id,
+                action="member.role_change",
+                target=user_id,
+                detail={"from": previous, "to": role},
+            )
+        user = await db.get(User, user_id)
+        return _member(membership, user)
+
+
+async def remove_member(db: AsyncSession, actor_id: str, org_id: str, user_id: str) -> None:
+    """Admins remove anyone; any member may remove themselves (leave). Sessions are revoked."""
+    is_self = actor_id == user_id
+    async with db.begin():
+        await require_org_role(db, actor_id, org_id, *MEMBERSHIP_ROLES)
+        await _lock_org(db, org_id)
+        await require_org_role(db, actor_id, org_id, *(MEMBERSHIP_ROLES if is_self else ("admin",)))
+        membership = await _active_member(db, org_id, user_id)
+        await _ensure_not_last_admin(db, membership)
+        await deactivate_membership(db, org_id, user_id)
+        await record_audit(
+            db,
+            actor_id=actor_id,
+            org_id=org_id,
+            action="member.remove",
+            target=user_id,
+            detail={"self": is_self},
+        )

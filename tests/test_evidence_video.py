@@ -347,6 +347,8 @@ def test_service_uses_raised_browser_budget(tmp_path):
     )
     assert service.browser_limits.max_concurrent_requests == 4
     assert service.browser_limits.max_total_requests == 300
+    # The 40,000 default ran out before plan revision on busy pages with reporter activity.
+    assert service.limits.max_reported_tokens == 100_000
 
 
 def test_encoder_check_logs_error_code_when_missing(monkeypatch, caplog):

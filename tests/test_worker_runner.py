@@ -362,3 +362,45 @@ async def test_result_files_and_events_are_redacted(db_session, conn, monkeypatc
     rows = (await db_session.scalars(select(JobEvent).where(JobEvent.job_id == job_id))).all()
     running = next(r for r in rows if r.kind == "running")
     assert running.detail == {"note": PII_CLEAN, "plan_sha256": "ab" * 32}
+
+
+def test_build_reviewer_unset_is_disabled(monkeypatch):
+    monkeypatch.delenv("QA_CRITIC_PROVIDER", raising=False)
+    assert runner.build_reviewer() is None
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"QA_CRITIC_PROVIDER": "groq"},  # key/model missing
+        {"QA_CRITIC_PROVIDER": "groq", "GROQ_API_KEY": "k", "GROQ_MODEL": "bad model name"},
+        {"QA_CRITIC_PROVIDER": "nope"},
+    ],
+)
+def test_build_reviewer_misconfigured_fails_instead_of_disabling(monkeypatch, env):
+    for name in ("GROQ_API_KEY", "GROQ_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(runner.JobInputError) as caught:
+        runner.build_reviewer()
+    assert caught.value.code == "CRITIC_CONFIG_INVALID"
+
+
+def test_build_reviewer_groq(monkeypatch):
+    monkeypatch.setenv("QA_CRITIC_PROVIDER", "Groq")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    reviewer = runner.build_reviewer()
+    assert reviewer.model == "openai/gpt-oss-120b"
+
+
+async def test_misconfigured_critic_fails_job_before_model_call(db_session, conn, monkeypatch):
+    monkeypatch.setenv("QA_CRITIC_PROVIDER", "groq")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    _, job_id = await queued_job(db_session, conn)
+    model = ScriptedModel([])
+    await asyncio.to_thread(runner.execute_job, job_id, model=model)
+    job = await job_row(db_session, job_id)
+    assert (job.status, job.backend_error_code) == ("failed", "CRITIC_CONFIG_INVALID")
+    assert model.calls == []

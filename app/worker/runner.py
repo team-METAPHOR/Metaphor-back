@@ -17,6 +17,7 @@ from pathlib import Path
 import psycopg
 from core_engine import (
     BrowserOptions,
+    GroqModel,
     JobStore,
     OpenAIModel,
     QARequest,
@@ -92,7 +93,30 @@ def load_session_headers(org_id: str, ref: str | None) -> dict[str, str]:
     return headers
 
 
-def build_service(snapshot: dict, store: JobStore, model, app_version: str | None) -> QAService:
+CRITIC_PROVIDERS = {"groq": GroqModel.from_env}
+
+
+def build_reviewer():
+    """Operator-chosen plan critic (`QA_CRITIC_PROVIDER`, worker env only), or None when unset.
+
+    A configured critic that can't be built fails the job: it never silently falls back to a
+    single-model run. The engine itself fails a job whose critic call fails."""
+    provider = os.environ.get("QA_CRITIC_PROVIDER", "").strip().lower()
+    if not provider:
+        return None
+    factory = CRITIC_PROVIDERS.get(provider)
+    if factory is None:
+        raise JobInputError("CRITIC_CONFIG_INVALID")
+    try:
+        return factory()
+    except ValueError:
+        # Message may name the env var only; never the key. Code is enough.
+        raise JobInputError("CRITIC_CONFIG_INVALID") from None
+
+
+def build_service(
+    snapshot: dict, store: JobStore, model, app_version: str | None, reviewer=None
+) -> QAService:
     policy = RunPolicy(
         program_id=snapshot["program_id"],
         scope_revision=snapshot["scope_revision"],
@@ -112,7 +136,7 @@ def build_service(snapshot: dict, store: JobStore, model, app_version: str | Non
             snapshot["org_id"], snapshot.get("session_secret_ref")
         ),
     )
-    return QAService(model, policy, store, options=options)
+    return QAService(model, policy, store, options=options, reviewer=reviewer)
 
 
 class Monitor(threading.Thread):
@@ -240,14 +264,17 @@ async def _call_engine(service: QAService, data: dict, reset, monitor: Monitor):
     return await service.run(request, **callbacks)
 
 
-def execute_job(job_id: str, *, model=None) -> None:
+_FROM_ENV = object()
+
+
+def execute_job(job_id: str, *, model=None, reviewer=_FROM_ENV) -> None:
     """Run one claimed job to a terminal state. Never leaves it running on any failure."""
     with psycopg.connect(sync_database_url(), autocommit=True) as conn:
         data = _load(conn, job_id)
         if data is None:
             return  # cancelled/reaped before we started
         try:
-            _execute(conn, job_id, data, model)
+            _execute(conn, job_id, data, model, reviewer)
         except JobInputError as error:
             queue.finish_if_active(conn, job_id, "failed", error.code)
         except (ValueError, KeyError):
@@ -261,7 +288,7 @@ def execute_job(job_id: str, *, model=None) -> None:
             queue.finish_if_active(conn, job_id, "failed", "WORKER_UNEXPECTED")
 
 
-def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
+def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer) -> None:
     job, report, program = data["job"], data["report"], data["program"]
     snapshot = job["scope_snapshot"]
     if snapshot["reset_adapter"] not in RESETS:
@@ -273,6 +300,8 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         if not source or not all((root / source / name).is_file() for name in needed):
             # e.g. a worker without the shared volume, or files removed by retention.
             raise JobInputError("BASELINE_ARTIFACTS_MISSING")
+    if reviewer is _FROM_ENV:
+        reviewer = build_reviewer()
     reset = RESETS[snapshot["reset_adapter"]](snapshot)
     monitor = Monitor(job_id, program["id"], job["scope_revision"])
 
@@ -288,7 +317,9 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         monitor.engine_dir = root / engine_job_id
 
     store = BoundJobStore(root, bind)
-    service = build_service(snapshot, store, model or OpenAIModel.from_env(), job["app_version"])
+    service = build_service(
+        snapshot, store, model or OpenAIModel.from_env(), job["app_version"], reviewer
+    )
 
     # Jobs sharing a synthetic account/data set run one at a time.
     # ponytail: per-context serialization; split data spaces if throughput matters.

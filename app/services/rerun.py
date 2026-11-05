@@ -108,6 +108,18 @@ AUTO_FRESH_SOURCE_KINDS = ("initial", "resume")
 # create_job refusals that mean "not now": active job, scrubbed report, unverified origin
 # (scope moved to a new origin since the run), daily limit.
 AUTO_FRESH_SKIP_STATUSES = (409, 410, 422, 429)
+# The model provider, not the scenario, ended the job: a new scenario would spend the primary
+# model again on the same rate limit, bad key or outage.
+PROVIDER_ERROR_CODES = frozenset(
+    {
+        "MODEL_RATE_LIMITED",
+        "MODEL_AUTH_FAILED",
+        "MODEL_TIMEOUT",
+        "MODEL_UNAVAILABLE",
+        "MODEL_HTTP_ERROR",
+        "MODEL_RESPONSE_TOO_LARGE",
+    }
+)
 NOTE_HEADER = "[이전 재현 시도] 아래 계획은 결론을 내지 못했습니다. 다른 해석·경로로 시도하세요."
 NOTE_MAX_STEPS = 20
 NOTE_MAX_TARGET = 200
@@ -164,6 +176,8 @@ async def auto_fresh(session: AsyncSession, job_id: str) -> str | None:
         async with session.begin():
             job = await session.get(ValidationJob, job_id)
             if job is None or job.status != "inconclusive":
+                return None
+            if job.error_code in PROVIDER_ERROR_CODES:
                 return None
             report = await session.get(Report, job.report_id)
             program = await session.get(Program, report.program_id)

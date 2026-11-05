@@ -75,6 +75,12 @@ uv run uvicorn app.main:app --reload
 - `IP_HASH_SECRET`: 위젯 신고자 IP를 HMAC-SHA256으로 해시할 때 쓰는 키입니다. 원본 IP는 저장하지 않습니다. 비어 있으면 위젯 신고 API가 503 `WIDGET_UNAVAILABLE`을 반환합니다. 환경마다 긴 무작위 값을 넣으세요.
 - 프록시·로드밸런서 뒤에서는 `uvicorn --proxy-headers --forwarded-allow-ips=<LB IP>`로 실행해야 IP별 신고 한도가 실제 클라이언트 기준으로 동작합니다.
 
+### 환경 변수 (워커 전용)
+
+- `OPENAI_API_KEY`, `OPENAI_MODEL`: 주 모델입니다.
+- `QA_CRITIC_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_MODEL`: 실행 전에 재현 계획을 검토하는 비판 모델입니다. 비워 두면 검토하지 않습니다. 설정했는데 키나 모델이 잘못되면 작업은 `CRITIC_CONFIG_INVALID`로 실패하며, 단일 모델로 몰래 바꿔 실행하지 않습니다.
+- 공급자 오류(`MODEL_RATE_LIMITED`, `MODEL_AUTH_FAILED`, `MODEL_TIMEOUT` 등)로 결론이 나지 않은 작업에는 자동 재생성(`auto_fresh`)을 걸지 않습니다.
+
 ### 보존 기간 정리
 
 ```bash

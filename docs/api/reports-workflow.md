@@ -146,6 +146,16 @@
 
 조건별 결과(2단계)는 엔진의 조건별 실행(Core_engine #9, Metaphor-back #55)이 들어온 다음에 추가합니다.
 
+## 중복 신고 원문 (`GET /reports/{report_id}/duplicates`)
+
+위젯 신고가 기존 신고의 중복으로 판정돼도, 그 신고의 원문은 따로 저장합니다. 저장하는 것은 설명(원본과 같은 마스킹 처리), `client_context`, 마스킹된 스크린샷입니다. 신고자에게 가는 응답은 예전과 똑같이 `200 {"status":"duplicate","receipt_id":null}`입니다.
+
+- 신고 하나당 원문은 최대 50건까지 저장합니다. 그다음부터는 `duplicate_count`만 늘어납니다.
+- 목록은 최신순이고 `limit`(1~100, 기본 20)과 `cursor`로 페이지를 넘깁니다. 각 항목은 `{id, received_at, description, has_screenshot, input_artifact_id, client_context}`이고, 스크린샷은 `GET /evidence/{input_artifact_id}/download`로 받습니다.
+- 권한은 신고 상세와 같습니다. `viewer`도 볼 수 있고, 다른 회사면 404입니다.
+- 목록과 상세 응답의 `latest_duplicate_excerpt`에는 가장 최근 중복 설명의 앞 120자가 들어갑니다. 중복이 없으면 `null`입니다. "'결제가 안 돼요' 외 8건" 같은 표시는 이 값과 `duplicate_count`로 만듭니다.
+- 원문은 원본 신고와 같은 보존 기간을 따릅니다. 보존 기간이 지나 신고가 정리될 때 원문과 스크린샷도 함께 지웁니다.
+
 ## 필요 조치 (`required_actions`)와 최근 시도 요약 (`best_attempt`)
 
 제보 상세(`GET /reports/{id}`, `GET /orgs/{org_id}/reports/{number}`)에 들어갑니다. 기준 코드는 `app/services/report_actions.py`입니다.

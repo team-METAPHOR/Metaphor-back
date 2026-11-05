@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Membership, Organization, Report, ValidationJob
+from app.models import Membership, Organization, Report, User, ValidationJob
 
 
 async def get(db: AsyncSession, report_id: str) -> Report | None:
@@ -26,6 +26,33 @@ def member_org_ids(user_id: str):
     )
 
 
+def assignee_active():
+    """True when the report's assignee is an active user with an active membership in the
+    report's org. Correlated to `Report`, so it is evaluated in the same query."""
+    return (
+        exists()
+        .where(
+            Membership.user_id == Report.assignee_id,
+            Membership.org_id == Report.org_id,
+            Membership.is_active,
+        )
+        .correlate(Report)
+        & User.is_active
+    )
+
+
+async def get_assignee(db: AsyncSession, report_id: str) -> tuple[User, bool] | None:
+    """The report's assignee and whether they are still an active member, in one query."""
+    query = (
+        select(User, assignee_active())
+        .select_from(Report)
+        .join(User, User.id == Report.assignee_id)
+        .where(Report.id == report_id)
+    )
+    row = (await db.execute(query)).first()
+    return (row[0], row[1]) if row else None
+
+
 async def list_visible(
     db: AsyncSession,
     user_id: str,
@@ -34,11 +61,14 @@ async def list_visible(
     cursor: tuple[datetime, str] | None,
     source: str | None,
     program_id: str | None,
-) -> list[tuple[Report, ValidationJob | None]]:
-    """Reports of the user's active orgs, newest first."""
+    assignee_id: str | None = None,
+) -> list[tuple[Report, ValidationJob | None, User | None, bool | None]]:
+    """Reports of the user's active orgs, newest first, with latest job, assignee and whether
+    the assignee is still an active member of the report's org."""
     query = (
-        select(Report, ValidationJob)
+        select(Report, ValidationJob, User, assignee_active())
         .outerjoin(ValidationJob, ValidationJob.id == Report.latest_job_id)
+        .outerjoin(User, User.id == Report.assignee_id)
         .where(Report.org_id.in_(member_org_ids(user_id)))
         .order_by(Report.created_at.desc(), Report.id.desc())
         .limit(limit + 1)
@@ -52,4 +82,6 @@ async def list_visible(
         query = query.where(Report.source == source)
     if program_id:
         query = query.where(Report.program_id == program_id)
+    if assignee_id:
+        query = query.where(Report.assignee_id == assignee_id)
     return [tuple(row) for row in (await db.execute(query)).all()]

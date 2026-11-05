@@ -13,11 +13,11 @@ from app.core.ids import new_id
 from app.core.pagination import decode_cursor, encode_cursor
 from app.core.text import sanitize_text
 from app.integrations import storage
-from app.models import Artifact, ProgramScopeRevision, Report, ValidationJob
+from app.models import Artifact, ProgramScopeRevision, Report, User, ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
-from app.schemas.report import ReportCreated, ReportDetail, ReportItem, ReportList
+from app.schemas.report import Assignee, ReportCreated, ReportDetail, ReportItem, ReportList
 from app.schemas.validation_job import JobBrief
 from app.services.access import org_role
 from app.services.audit import record_audit
@@ -222,7 +222,20 @@ def report_progress(workflow_status: str, job: JobBrief | ValidationJob | None) 
     return "reproduced" if job.verdict == "reproduced" else "triaged"
 
 
-def _item(report: Report, job: ValidationJob | None) -> dict:
+def _assignee(user: User | None, active: bool | None) -> Assignee | None:
+    if user is None:
+        return None
+    if not active:
+        return Assignee(id=user.id, display_name=None, email=None, active=False)
+    return Assignee(id=user.id, display_name=user.display_name, email=user.email, active=True)
+
+
+def _item(
+    report: Report,
+    job: ValidationJob | None,
+    assignee: User | None = None,
+    assignee_active: bool | None = None,
+) -> dict:
     return {
         "id": report.id,
         "program_id": report.program_id,
@@ -234,6 +247,7 @@ def _item(report: Report, job: ValidationJob | None) -> dict:
         "workflow_status": report.workflow_status,
         "progress": report_progress(report.workflow_status, job),
         "closed_at": report.closed_at,
+        "assignee": _assignee(assignee, assignee_active),
         "latest_job": _brief(job),
         "created_at": report.created_at,
     }
@@ -247,18 +261,26 @@ async def list_reports(
     cursor: str | None,
     source: str | None,
     program_id: str | None,
+    assignee: str | None = None,
 ) -> ReportList:
+    """`assignee` is a user id, or "me" for the caller."""
     position = decode_cursor(cursor) if cursor else None
     async with db.begin():
         rows = await reports_repo.list_visible(
-            db, user_id, limit=limit, cursor=position, source=source, program_id=program_id
+            db,
+            user_id,
+            limit=limit,
+            cursor=position,
+            source=source,
+            program_id=program_id,
+            assignee_id=user_id if assignee == "me" else assignee,
         )
     page = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
         last = page[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(r, j)) for r, j in page]
+    items = [ReportItem(**_item(*row)) for row in page]
     return ReportList(items=items, next_cursor=next_cursor)
 
 
@@ -270,8 +292,9 @@ async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDe
 
 async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
+    assignee = await reports_repo.get_assignee(db, report.id) if report.assignee_id else None
     return ReportDetail(
-        **_item(report, job),
+        **_item(report, job, *(assignee or ())),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,
@@ -286,6 +309,11 @@ async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
 WORKFLOW_ROLES = ("reviewer", "admin")
 
 
+async def _require_triage_role(db: AsyncSession, user_id: str, report: Report) -> None:
+    if await org_role(db, user_id, report.org_id) not in WORKFLOW_ROLES:
+        raise ApiError(403, "FORBIDDEN", "제보 상태를 바꿀 권한이 없습니다.")
+
+
 async def set_workflow_status(
     db: AsyncSession, user_id: str, report_id: str, status: str
 ) -> ReportDetail:
@@ -293,8 +321,7 @@ async def set_workflow_status(
     retest) and final: a closed report can no longer be changed here."""
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
-        if await org_role(db, user_id, report.org_id) not in WORKFLOW_ROLES:
-            raise ApiError(403, "FORBIDDEN", "제보 상태를 바꿀 권한이 없습니다.")
+        await _require_triage_role(db, user_id, report)
         # Row lock so a concurrent auto-close is not overwritten.
         await db.refresh(report, with_for_update=True)
         if report.workflow_status == "closed":
@@ -310,6 +337,40 @@ async def set_workflow_status(
                 action="report.workflow",
                 target=report.id,
                 detail={"from": previous, "to": status},
+            )
+        await db.refresh(report)
+        return await _detail(db, report)
+
+
+async def _assignable(db: AsyncSession, user_id: str, org_id: str) -> bool:
+    """Active user with an active membership in the active org."""
+    user = await db.get(User, user_id)
+    return user is not None and user.is_active and await org_role(db, user_id, org_id) is not None
+
+
+async def set_assignee(
+    db: AsyncSession, user_id: str, report_id: str, assignee_id: str | None
+) -> ReportDetail:
+    """Assign (or with None, unassign) a report to an active member of its org."""
+    async with db.begin():
+        report = await load_visible_report(db, user_id, report_id)
+        await _require_triage_role(db, user_id, report)
+        # One message whether the user is unknown or just not a member (no account probing).
+        if assignee_id is not None and not await _assignable(db, assignee_id, report.org_id):
+            raise ApiError(
+                422, "ASSIGNEE_NOT_MEMBER", "이 조직의 활성 멤버만 담당자가 될 수 있습니다."
+            )
+        previous = report.assignee_id
+        if previous != assignee_id:
+            report.assignee_id = assignee_id
+            await db.flush()
+            await record_audit(
+                db,
+                actor_id=user_id,
+                org_id=report.org_id,
+                action="report.assign",
+                target=report.id,
+                detail={"from": previous, "to": assignee_id},
             )
         await db.refresh(report)
         return await _detail(db, report)

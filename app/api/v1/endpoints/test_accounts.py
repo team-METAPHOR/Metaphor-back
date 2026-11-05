@@ -22,6 +22,7 @@ def _response(found: tuple[ProgramTestAccount | None, bool]) -> TestAccountRespo
         submit_path=row.submit_path,
         success_path=row.success_path,
         success_selector=row.success_selector,
+        submit_selector=row.submit_selector,
         unauthenticated_paths=row.unauthenticated_paths,
         updated_at=row.updated_at,
     )

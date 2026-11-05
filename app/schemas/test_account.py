@@ -21,6 +21,7 @@ class TestAccountPut(BaseModel):
     submit_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
     success_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
     success_selector: str | None = Field(default=None, min_length=1, max_length=256)
+    submit_selector: str | None = Field(default=None, min_length=1, max_length=256)
     # Exact paths (no prefixes) whose GET fetch/XHR 401 is normal while signing in.
     unauthenticated_paths: list[LoginPath] = Field(default=[], max_length=MAX_UNAUTHENTICATED_PATHS)
 
@@ -38,5 +39,6 @@ class TestAccountResponse(BaseModel):
     submit_path: str | None = None
     success_path: str | None = None
     success_selector: str | None = None
+    submit_selector: str | None = None
     unauthenticated_paths: list[str] = []
     updated_at: datetime | None

@@ -53,7 +53,8 @@ def load_login(conn: psycopg.Connection, program_id: str) -> LoginOptions | None
     """Engine login for the program's account, or None when none is stored or it lacks a
     login path / success signal (runs then stay anonymous, and the API's `in_use` is false)."""
     row = conn.execute(
-        "SELECT login_path, submit_path, success_path, success_selector, unauthenticated_paths"
+        "SELECT login_path, submit_path, success_path, success_selector, unauthenticated_paths,"
+        " submit_selector"
         " FROM program_test_accounts WHERE program_id = %s",
         (program_id,),
     ).fetchone()
@@ -62,7 +63,7 @@ def load_login(conn: psycopg.Connection, program_id: str) -> LoginOptions | None
     credentials = load_test_account(conn, program_id)
     if credentials is None:
         return None  # deleted in between
-    login_path, submit_path, success_path, success_selector, unauthenticated = row
+    login_path, submit_path, success_path, success_selector, unauthenticated, submit_selector = row
     try:
         return LoginOptions(
             login_path=login_path,
@@ -73,6 +74,8 @@ def load_login(conn: psycopg.Connection, program_id: str) -> LoginOptions | None
             success_selector=success_selector,
             # Trusted program config (admin-set), never report or model input.
             unauthenticated_paths=tuple(unauthenticated or ()),
+            # Omitted when unset so the engine keeps its own default selector.
+            **({"submit_selector": submit_selector} if submit_selector else {}),
         )
     except ValueError:
         # e.g. a credential embedded in the stored paths; the message is never surfaced.

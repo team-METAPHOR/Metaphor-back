@@ -31,6 +31,9 @@ class ProgramTestAccount(Base):
     submit_path: Mapped[str | None] = mapped_column(String(2048))
     success_path: Mapped[str | None] = mapped_column(String(2048))
     success_selector: Mapped[str | None] = mapped_column(String(256))
+    # The login form's submit control when the engine default matches more than one button
+    # (e.g. a header search form on the login page). None = engine default.
+    submit_selector: Mapped[str | None] = mapped_column(String(256))
     # Exact paths whose GET 401 is the app's normal signed-out probe while signing in
     # (core_engine 0.6.0 LoginOptions.unauthenticated_paths, e.g. `/api/auth/me`).
     unauthenticated_paths: Mapped[list[str]] = mapped_column(

@@ -357,6 +357,40 @@ async def test_unauthenticated_paths_saved_and_passed_to_engine(
     assert login.unauthenticated_paths == ("/app/api/auth/me",)
 
 
+async def test_submit_selector_saved_and_passed_to_engine(
+    client, db_session, conn, keypair, monkeypatch
+):
+    """A page with another submit button (e.g. a header search form) needs the login form's
+    exact submit control; the engine refuses to click when its default matches two."""
+    from app.worker.test_accounts import load_login
+
+    world = await seeded(client, db_session)
+    monkeypatch.setenv(PRIVATE_KEY_ENV, keypair[0])
+    body = {**LOGIN_BODY, "submit_selector": '[data-testid="login-submit"]'}
+    saved = await client.put(url(world), json=body, headers=world["admin"])
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["submit_selector"] == '[data-testid="login-submit"]'
+    login = load_login(conn, world["program"].id)
+    assert login.submit_selector == '[data-testid="login-submit"]'
+
+
+async def test_submit_selector_defaults_to_engine_default(
+    client, db_session, conn, keypair, monkeypatch
+):
+    from core_engine import LoginOptions
+
+    from app.worker.test_accounts import load_login
+
+    world = await seeded(client, db_session)
+    monkeypatch.setenv(PRIVATE_KEY_ENV, keypair[0])
+    assert (
+        await client.put(url(world), json=LOGIN_BODY, headers=world["admin"])
+    ).status_code == 200
+    assert (await client.get(url(world), headers=world["viewer"])).json()["submit_selector"] is None
+    default = LoginOptions.__dataclass_fields__["submit_selector"].default
+    assert load_login(conn, world["program"].id).submit_selector == default
+
+
 @pytest.mark.parametrize(
     ("paths", "code"),
     [

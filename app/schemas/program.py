@@ -4,7 +4,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Status = Literal["draft", "active", "paused", "closed"]
-SubmissionMode = Literal["open_authenticated", "invite_only"]
 
 # Engine validates content (RunPolicy / BrowserOptions); these only bound input size.
 SCOPE_FIELDS = (
@@ -40,7 +39,6 @@ class ProgramCreate(_Strict):
     org_id: str = Field(max_length=32)
     name: str = Field(min_length=1, max_length=200)
     status: Status = "draft"
-    submission_mode: SubmissionMode = "invite_only"
     external_ai_allowed: bool = False
     auto_fresh_retries: AutoFreshRetries = 1
     base_url: str = Field(max_length=2048)
@@ -58,7 +56,6 @@ class ProgramCreate(_Strict):
 class ProgramPatch(_Strict):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     status: Status | None = None
-    submission_mode: SubmissionMode | None = None
     external_ai_allowed: bool | None = None
     auto_fresh_retries: AutoFreshRetries | None = None
     base_url: str | None = Field(default=None, max_length=2048)
@@ -96,7 +93,6 @@ class ProgramResponse(BaseModel):
     org_id: str
     name: str
     status: str
-    submission_mode: str
     external_ai_allowed: bool
     daily_job_limit: int
     retention_days: int
@@ -107,28 +103,13 @@ class ProgramResponse(BaseModel):
     updated_at: datetime
 
 
-class ProgramPublic(BaseModel):
-    """What a non-member reporter (invited or open program) may see."""
-
+class ProgramSummary(BaseModel):
     id: str
     name: str
     status: str
-    submission_mode: str
     base_url: str
-
-
-class ProgramSummary(ProgramPublic):
-    role: str | None  # org role, or None for a reporter view
+    role: str  # the caller's role in the owning org
 
 
 class ProgramList(BaseModel):
     items: list[ProgramSummary]
-
-
-class InviteCreate(_Strict):
-    email: str = Field(max_length=320)
-
-
-class InviteResponse(BaseModel):
-    program_id: str
-    user_id: str

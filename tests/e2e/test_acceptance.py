@@ -55,11 +55,11 @@ async def world(client, db_session, site):
         approved_app_versions=["build-2"],
         test_context_id="e2e-search",
     )
-    program.submission_mode = "open_authenticated"
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
-    _, reporter_h = await login_as(client, db_session)
-    return {"program": program, "admin_h": admin_h, "reporter_h": reporter_h, "base": base}
+    # Customer developer filing the report manually in the dashboard.
+    _, dev_h = await login_as(client, db_session, org, "developer")
+    return {"program": program, "admin_h": admin_h, "dev_h": dev_h, "base": base}
 
 
 async def run_worker(conn, job_id, model):
@@ -86,7 +86,7 @@ async def test_image_report_reproduced_then_resolved_by_retest(
             "description": "cat 검색 후 결과 없는 검색어로 검색하면 cat 목록이 그대로 남아요",
         },
         files={"screenshot": ("s.png", screenshot(), "image/png")},
-        headers=world["reporter_h"],
+        headers=world["dev_h"],
     )
     assert created.status_code == 201, created.text
     report_id, job_id = created.json()["id"], created.json()["validation_job_id"]
@@ -123,9 +123,10 @@ async def test_image_report_reproduced_then_resolved_by_retest(
     report = await get_json(client, f"/api/v1/reports/{report_id}", world["admin_h"])
     assert report["workflow_status"] == "received"  # never auto-closed
 
-    # The reporter sees progress, not the customer's verdict or evidence.
-    mine = await get_json(client, f"/api/v1/validation-jobs/{job_id}", world["reporter_h"])
-    assert mine["status"] == "completed" and mine["verdict"] is None
+    # Someone outside the customer org cannot even see that the job exists.
+    _, stranger_h = await login_as(client, db_session)
+    hidden = await client.get(f"/api/v1/validation-jobs/{job_id}", headers=stranger_h)
+    assert hidden.status_code == 404
 
 
 async def test_needs_info_answer_resumes_with_new_job(client, db_session, world, conn):
@@ -134,11 +135,11 @@ async def test_needs_info_answer_resumes_with_new_job(client, db_session, world,
         "/api/v1/reports",
         data={"program_id": world["program"].id, "target_url": url},
         files={"screenshot": ("s.png", screenshot(), "image/png")},
-        headers=world["reporter_h"],
+        headers=world["dev_h"],
     )
     report_id, job_id = created.json()["id"], created.json()["validation_job_id"]
     await run_worker(conn, job_id, ScriptedModel([intake("needs_info")]))
-    asked = await get_json(client, f"/api/v1/validation-jobs/{job_id}", world["reporter_h"])
+    asked = await get_json(client, f"/api/v1/validation-jobs/{job_id}", world["dev_h"])
     assert asked["status"] == "needs_info" and asked["questions"]
 
     answered = await client.post(
@@ -147,7 +148,7 @@ async def test_needs_info_answer_resumes_with_new_job(client, db_session, world,
             "source_job_id": job_id,
             "answers": "cat은 결과가 있고 missing은 결과가 없어야 합니다",
         },
-        headers=world["reporter_h"],
+        headers=world["admin_h"],
     )
     resume_id = answered.json()["validation_job_id"]
     await run_worker(conn, resume_id, ScriptedModel([intake(), plan(url), analysis()]))
@@ -209,7 +210,7 @@ async def test_no_secrets_or_paths_leak(client, db_session, world, conn, caplog,
     created = await client.post(
         "/api/v1/reports",
         data={"program_id": world["program"].id, "target_url": url, "description": "버그"},
-        headers=world["reporter_h"],
+        headers=world["dev_h"],
     )
     job_id = created.json()["validation_job_id"]
     await run_worker(conn, job_id, ScriptedModel([intake("needs_info")]))
@@ -240,7 +241,7 @@ async def test_real_model_reproduces_search_bug(client, db_session, world, conn)
             "cat 결과가 그대로 남습니다. 검색 완료 표시는 #ready가 done이 됩니다.",
             "expected_result": "결과 영역(#result)에 empty가 표시되어야 합니다.",
         },
-        headers=world["reporter_h"],
+        headers=world["dev_h"],
     )
     job_id = created.json()["validation_job_id"]
     await run_worker(conn, job_id, None)

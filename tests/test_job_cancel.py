@@ -11,17 +11,14 @@ from tests.test_reports_api import submit
 async def world(client, db_session):
     org = await make_org(db_session)
     program = await make_program(db_session, org)
-    program.submission_mode = "open_authenticated"
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
-    _, reporter_h = await login_as(client, db_session)
-    body = (await submit(client, reporter_h, program.id, description="버그")).json()
+    body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
-        "reporter_h": reporter_h,
     }
 
 
@@ -65,19 +62,6 @@ async def test_cancel_finished_409(client, db_session, world):
     assert response.json()["error"]["detail"] == {"status": "completed"}
 
 
-async def test_reporter_can_cancel_own_initial_job(client, db_session, world):
-    response = await cancel(client, world, world["reporter_h"])
-    assert response.status_code == 202
-
-
-async def test_reporter_cannot_cancel_org_requested_job(client, db_session, world):
-    row = await job(db_session, world)
-    row.kind = "retest"
-    await db_session.commit()
-    response = await cancel(client, world, world["reporter_h"])
-    assert response.status_code == 403
-
-
 async def test_developer_403_stranger_404(client, db_session, world):
     assert (await cancel(client, world, world["dev_h"])).status_code == 403
     _, stranger_h = await login_as(client, db_session)
@@ -110,35 +94,3 @@ async def test_cancel_vs_worker_result_keeps_result(client, db_session, world, c
     )
     row = await job(db_session, world)
     assert (row.status, row.verdict) == ("completed", "reproduced")
-
-
-async def test_reporter_cannot_cancel_resume_started_by_org(client, db_session, world):
-    row = await job(db_session, world)
-    row.status = "needs_info"
-    await db_session.commit()
-    answered = await client.post(
-        f"/api/v1/reports/{row.report_id}/clarifications",
-        json={"source_job_id": row.id, "answers": "관리자 답변"},
-        headers=world["admin_h"],
-    )
-    resume_id = answered.json()["validation_job_id"]
-    response = await client.post(
-        f"/api/v1/validation-jobs/{resume_id}/cancel", headers=world["reporter_h"]
-    )
-    assert response.status_code == 403
-
-
-async def test_reporter_can_cancel_own_resume(client, db_session, world):
-    row = await job(db_session, world)
-    row.status = "needs_info"
-    await db_session.commit()
-    answered = await client.post(
-        f"/api/v1/reports/{row.report_id}/clarifications",
-        json={"source_job_id": row.id, "answers": "제보자 답변"},
-        headers=world["reporter_h"],
-    )
-    resume_id = answered.json()["validation_job_id"]
-    response = await client.post(
-        f"/api/v1/validation-jobs/{resume_id}/cancel", headers=world["reporter_h"]
-    )
-    assert response.status_code == 202

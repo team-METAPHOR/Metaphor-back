@@ -19,19 +19,16 @@ def _worker(worker_env):
 async def world(client, db_session):
     org = await make_org(db_session)
     program = await make_program(db_session, org, approved_app_versions=["build-2"])
-    program.submission_mode = "open_authenticated"
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
-    _, reporter_h = await login_as(client, db_session)
-    body = (await submit(client, reporter_h, program.id, description="버그")).json()
+    body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "program": program,
         "report_id": body["id"],
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
-        "reporter_h": reporter_h,
     }
 
 
@@ -123,7 +120,7 @@ async def test_retest_after_scope_change_409(client, db_session, world):
 
 
 async def test_baseline_from_other_report_404(client, db_session, world):
-    other = (await submit(client, world["reporter_h"], world["program"].id, description="x")).json()
+    other = (await submit(client, world["dev_h"], world["program"].id, description="x")).json()
     await finish(db_session, other["validation_job_id"])
     body = {
         "mode": "retest",
@@ -134,11 +131,10 @@ async def test_baseline_from_other_report_404(client, db_session, world):
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize(("who", "status"), [("reporter_h", 403), ("dev_h", 403)])
-async def test_only_reviewer_or_admin(client, db_session, world, who, status):
+async def test_only_reviewer_or_admin(client, db_session, world):
     await finish(db_session, world["job_id"])
-    response = await request(client, world, {"mode": "fresh"}, world[who])
-    assert response.status_code == status
+    response = await request(client, world, {"mode": "fresh"}, world["dev_h"])
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize(

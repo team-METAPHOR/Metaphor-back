@@ -18,7 +18,7 @@ from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import ReportCreated, ReportDetail, ReportItem, ReportList
 from app.schemas.validation_job import JobBrief
-from app.services.access import can_submit, org_role
+from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.intake import (
@@ -149,12 +149,11 @@ async def submit_report(
 
     async with db.begin():
         program = await programs_repo.get(db, form.program_id)
-        if program is None:
+        # Any active member of the owning org may file; everyone else gets 404 (cross-org rule).
+        if program is None or await org_role(db, user_id, program.owner_org_id) is None:
             raise ApiError(404, "NOT_FOUND", "프로그램을 찾을 수 없습니다.")
         if program.status != "active":
             raise ApiError(422, "PROGRAM_NOT_ACTIVE", "현재 제보를 받지 않는 프로그램입니다.")
-        if not await can_submit(db, user_id, program):
-            raise ApiError(403, "SUBMISSION_FORBIDDEN", "이 프로그램에 제보할 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
             await lock_key(db, f"reports:{user_id}")

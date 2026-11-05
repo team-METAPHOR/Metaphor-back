@@ -116,6 +116,13 @@ API 재시작을 수행한다. 워커 unit이 등록된 서버에서는 워커�
 미등록 서버에서는 안내만 남긴다. 서비스 파일 갱신은 자동 설치되지 않으므로 변경 시
 3장의 복사와 daemon-reload를 다시 수행한다.
 
+엔진을 올린 배포(vendor 휠 교체)는 API만 재시작해서 끝내지 않는다. 워커도 재시작한 뒤
+워커가 쓰는 가상환경에서 실제 버전을 확인한다(현재 고정 `0.6.0`, `2c21df2`).
+
+```bash
+uv run python -c "import importlib.metadata as m; print(m.version('metaphor-core-engine'))"
+```
+
 `/api/v1/health`는 API의 생존만 확인한다. 이번 작업에는 DB heartbeat와
 `worker_seen_at` 응답을 추가하지 않는다. 워커는 systemd 상태·시작 로그·실제 큐 처리로 확인한다.
 

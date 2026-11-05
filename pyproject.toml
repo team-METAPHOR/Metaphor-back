@@ -23,12 +23,12 @@ dev = [
     "ruff>=0.9,<1",
 ]
 worker = [
-    "metaphor-core-engine[browser]",
+    "metaphor-core-engine[browser,video]",
 ]
 
 [tool.uv.sources]
-# Built from team-METAPHOR/Core_engine@d04c232 (see vendor/README.md).
-metaphor-core-engine = { path = "vendor/metaphor_core_engine-0.2.0-py3-none-any.whl" }
+# Built from team-METAPHOR/Core_engine@4a710f0 (see vendor/README.md).
+metaphor-core-engine = { path = "vendor/metaphor_core_engine-0.3.0-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

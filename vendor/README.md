@@ -1,7 +1,7 @@
 # vendor
 
-`metaphor_core_engine-0.8.0-py3-none-any.whl` is built from the private repository
-`team-METAPHOR/Core_engine` at commit `4c6b024e861b96c76203038b43c2c20ba965d882`
+`metaphor_core_engine-0.7.2-py3-none-any.whl` is built from the private repository
+`team-METAPHOR/Core_engine` at commit `223ec381710f643d35aaab71c36a18f135b983a6`
 (`uv build --wheel`). It is vendored so CI and new checkouts install the engine without
 a cross-repository access token.
 
@@ -25,8 +25,8 @@ computes the SRI hash from the bytes, so the hash below is for reference only.
 | Field | Value |
 |---|---|
 | Version | `0.2.0` |
-| Source | `team-METAPHOR/Metaphor-sdk` @ `1dd5718ba190258c4d4b1d27010b435cf40115da` (`npm run build`; release pending) |
-| SRI | `sha384-Otqm+J0vaiAui09ne5QDRi6Jarpxd89Mh8RvdaZqB2dKcFW8V6PzIV30+e/d5Mo1` (computed from the local build) |
+| Source | `team-METAPHOR/Metaphor-sdk` @ `2058fc606642443f0d6316b53e0e68a45dea2ea1` (GitHub Release `v0.2.0` asset) |
+| SRI | `sha384-SOhEfhQwr68acxK5/YDPTNcpFnINajiQKMx9tDR0SQPv2dsMWSmDHucj8DpcnZT1` (matches the release `metaphor.js.sha384`) |
 
 `sdk/VERSION` holds the version on line 1 and the SDK commit on line 2. The version is the
 pinned URL (`metaphor-<version>.js`, cached as `immutable`), so **never change the bundle
@@ -42,4 +42,4 @@ git add -f vendor/sdk && uv run pytest -q tests/test_sdk_serving.py
 
 `versions/0.1.1/` preserves the previous immutable bundle and metadata. The API loads archived
 versions at startup, so existing pinned install snippets keep their original bytes and SRI.
-New 0.2.0 code and engine 0.8.0 must be reviewed before deployment; no release tag is created here.
+SDK 0.2.0 activity context needs engine 0.8.1 or later (`reporter_activity`).

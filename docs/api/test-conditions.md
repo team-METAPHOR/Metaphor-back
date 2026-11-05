@@ -1,7 +1,7 @@
 # 테스트 조건 비교 API (조건 등록·조건별 실행·조건별 결과)
 
 계정 역할·브라우저·화면 크기·응답 지연을 바꿔 가며 같은 제보를 재현해 보는 기능입니다.
-엔진 `ConditionsService`(core_engine 0.4.1, `0f833d2` 고정)를 씁니다.
+엔진 `ConditionsService`(core_engine 0.5.0, `093535d` 고정)를 씁니다.
 
 ## 조건 등록 (`/programs/{program_id}/test-conditions`)
 

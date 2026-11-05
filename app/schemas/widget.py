@@ -14,6 +14,7 @@ class WidgetSettingsPatch(BaseModel):
     public_reporting_enabled: bool | None = None
     auto_detect_enabled: bool | None = None
     live_screenshot_enabled: bool | None = None
+    breadcrumbs_enabled: bool | None = None
     allowed_origins: list[str] | None = Field(default=None, max_length=MAX_ALLOWED_ORIGINS)
 
 
@@ -30,6 +31,7 @@ class WidgetSettingsResponse(BaseModel):
     public_reporting_enabled: bool
     auto_detect_enabled: bool
     live_screenshot_enabled: bool
+    breadcrumbs_enabled: bool
     updated_at: datetime | None
 
 
@@ -73,6 +75,31 @@ class Environment(_Payload):
 class Consent(_Payload):
     environment: bool = False
     screenshot: bool = False
+    breadcrumbs: bool = False
+
+
+MAX_BREADCRUMBS = 30
+BREADCRUMB_WINDOW_MS = 300_000
+
+
+class BreadcrumbTarget(_Payload):
+    # Element identity only. Never input values, key presses or coordinates.
+    tag: str = Field(max_length=16)
+    role: str = Field(default="", max_length=32)
+    id: str = Field(default="", max_length=128)
+    test_id: str = Field(default="", max_length=128)
+    name: str = Field(default="", max_length=128)
+    text: str = Field(default="", max_length=80)
+    selector: str = Field(default="", max_length=256)
+
+
+class Breadcrumb(_Payload):
+    type: Literal["click", "navigation", "input", "submit"]
+    # Milliseconds before the report was submitted.
+    t: int = Field(ge=0, le=BREADCRUMB_WINDOW_MS)
+    path: str = Field(max_length=2048, pattern=r"^/")
+    # None for navigation, required otherwise (checked by the service).
+    target: BreadcrumbTarget | None = None
 
 
 class WidgetReportPayload(_Payload):
@@ -83,6 +110,7 @@ class WidgetReportPayload(_Payload):
     error: ErrorInfo | None = None
     environment: Environment | None = None
     mask_boxes: list[list[int]] | None = Field(default=None, max_length=20)
+    breadcrumbs: list[Breadcrumb] | None = Field(default=None, max_length=MAX_BREADCRUMBS)
     consent: Consent = Consent()
 
 
@@ -99,6 +127,12 @@ class WidgetLimits(BaseModel):
     max_mask_boxes: int
 
 
+class BreadcrumbConfig(BaseModel):
+    enabled: bool
+    max_items: int
+    window_ms: int
+
+
 class WidgetConfig(BaseModel):
     widget_enabled: bool
     reporting_enabled: bool
@@ -106,6 +140,7 @@ class WidgetConfig(BaseModel):
     auto_detect: AutoDetect
     limits: WidgetLimits
     mask_selectors: list[str]
+    breadcrumbs: BreadcrumbConfig
 
 
 class WidgetReceipt(BaseModel):

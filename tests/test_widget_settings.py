@@ -47,6 +47,7 @@ async def test_get_defaults_when_missing(client, world):
             "public_reporting_enabled": False,
             "auto_detect_enabled": False,
             "live_screenshot_enabled": False,
+            "breadcrumbs_enabled": False,
             "updated_at": None,
         }
 

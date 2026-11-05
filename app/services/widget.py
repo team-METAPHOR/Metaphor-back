@@ -13,11 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ApiError
 from app.core.hashing import keyed_hash
 from app.core.text import redact, sanitize_text
+from app.core.text import strip_query as _strip_query
 from app.models import Program, ProgramScopeRevision, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
 from app.repositories import widget as repo
 from app.repositories import widget_settings as settings_repo
-from app.schemas.widget import WidgetReportPayload
+from app.schemas.widget import (
+    BREADCRUMB_WINDOW_MS,
+    MAX_BREADCRUMBS,
+    WidgetReportPayload,
+)
+from app.services.breadcrumbs import clean_breadcrumbs
 from app.services.idempotency import run_once
 from app.services.intake import (
     MAX_MASK_BOXES,
@@ -31,7 +37,9 @@ from app.services.origin_verification import origin_of
 from app.services.reports import TEXT_LIMITS, create_report
 from app.services.widget_settings import normalize_origin, origin_kind
 
-MAX_PAYLOAD_BYTES = 32 * 1024
+# 30 breadcrumbs at their field limits plus a full description fit; the 6 MiB request cap
+# still applies.
+MAX_PAYLOAD_BYTES = 128 * 1024
 MAX_DESCRIPTION = TEXT_LIMITS["description"]
 SDK_HEADER = "\n\n[SDK 감지 정보]\n"
 # ponytail: fixed limits; per-customer settings when someone asks.
@@ -104,6 +112,11 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
         "limits": config_limits(),
         # Elements the SDK must black out before capturing a screenshot.
         "mask_selectors": list(dict.fromkeys([*BUILTIN_MASK_SELECTORS, *revision.mask_selectors])),
+        "breadcrumbs": {
+            "enabled": row.breadcrumbs_enabled,
+            "max_items": MAX_BREADCRUMBS,
+            "window_ms": BREADCRUMB_WINDOW_MS,
+        },
     }
 
 
@@ -130,10 +143,6 @@ def _error_details_invalid() -> ApiError:
 
 def _clean(value: str | None, limit: int) -> str:
     return sanitize_text(value or "", limit)
-
-
-def _strip_query(path: str) -> str:
-    return path.split("#", 1)[0].split("?", 1)[0]
 
 
 def _clean_stack(stack_top: str | None) -> str | None:
@@ -168,6 +177,8 @@ def _client_context(body: WidgetReportPayload, reported_url: str, query_stripped
             "timezone": _clean(env.timezone, 64),
             "viewport": env.viewport.model_dump() if env.viewport else None,
         }
+    if body.breadcrumbs is not None:
+        context["breadcrumbs"] = clean_breadcrumbs(body.breadcrumbs)
     return context
 
 
@@ -220,6 +231,12 @@ def _check_error_details(body: WidgetReportPayload) -> None:
         raise _error_details_invalid()
 
 
+def _check_breadcrumbs(body: WidgetReportPayload) -> None:
+    for item in body.breadcrumbs or ():
+        if (item.target is None) != (item.type == "navigation"):
+            raise ApiError(422, "BREADCRUMBS_INVALID", "최근 동작 형식이 올바르지 않습니다.")
+
+
 def _map_page_url(page_url: str, origin: str, base_url: str) -> tuple[str, str, str]:
     """Return (entry URL for the engine, origin kind, page path).
 
@@ -255,7 +272,10 @@ async def submit_report(
         raise ApiError(422, "CONSENT_REQUIRED", "스크린샷 전송 동의가 필요합니다.")
     if body.environment is not None and not body.consent.environment:
         raise ApiError(422, "CONSENT_REQUIRED", "환경 정보 전송 동의가 필요합니다.")
+    if body.breadcrumbs is not None and not body.consent.breadcrumbs:
+        raise ApiError(422, "CONSENT_REQUIRED", "최근 동작 전송 동의가 필요합니다.")
     _check_error_details(body)
+    _check_breadcrumbs(body)
     if body.mask_boxes and image is None:
         raise ApiError(422, "MASK_BOX_INVALID", "마스킹 영역은 스크린샷과 함께 보내야 합니다.")
     screenshot = prepare_screenshot(image, body.mask_boxes) if image is not None else None
@@ -270,6 +290,8 @@ async def submit_report(
             raise ApiError(403, "WIDGET_REPORTING_DISABLED", "위젯 신고가 꺼져 있습니다.")
         if body.error_type != "manual" and not row.auto_detect_enabled:
             raise ApiError(403, "AUTO_DETECT_DISABLED", "자동 오류 감지가 꺼져 있습니다.")
+        if body.breadcrumbs is not None and not row.breadcrumbs_enabled:
+            raise ApiError(403, "BREADCRUMBS_DISABLED", "최근 동작 수집이 꺼져 있습니다.")
         entry_url, kind, page_path = _map_page_url(body.page_url, origin, revision.base_url)
         if kind == "mapped" and screenshot is not None and not row.live_screenshot_enabled:
             raise ApiError(

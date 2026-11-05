@@ -146,6 +146,7 @@ async def test_widget_settings_defaults_off(db_session):
     assert settings.public_reporting_enabled is False
     assert settings.auto_detect_enabled is False
     assert settings.live_screenshot_enabled is False
+    assert settings.breadcrumbs_enabled is False
     assert settings.allowed_origins == []
     assert settings.public_project_key is None
 

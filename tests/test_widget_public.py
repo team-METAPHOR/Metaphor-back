@@ -248,6 +248,7 @@ async def test_config_screenshot_allowed_per_origin(client, world):
         },
         "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20},
         "mask_selectors": BUILTIN_MASKS,
+        "breadcrumbs": {"enabled": False, "max_items": 30, "window_ms": 300000},
     }
     assert staging.headers["Cache-Control"] == "public, max-age=60"
     assert "Origin" in staging.headers["Vary"]
@@ -503,7 +504,7 @@ async def test_unknown_payload_field_422(client, db_session, world, extra):
 async def test_invalid_payload_json_422(client, world):
     response = await post(client, world["key"], None, raw="{not json")
     assert response.status_code == 422
-    big = json.dumps(payload(description="x" * 40000))
+    big = json.dumps(payload(description="x" * 140000))
     assert (await post(client, world["key"], None, raw=big)).status_code == 422
 
 

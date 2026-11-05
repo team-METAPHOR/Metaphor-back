@@ -25,6 +25,7 @@ def _response(
             public_reporting_enabled=False,
             auto_detect_enabled=False,
             live_screenshot_enabled=False,
+            breadcrumbs_enabled=False,
             updated_at=None,
         )
     return WidgetSettingsResponse(
@@ -38,6 +39,7 @@ def _response(
         public_reporting_enabled=row.public_reporting_enabled,
         auto_detect_enabled=row.auto_detect_enabled,
         live_screenshot_enabled=row.live_screenshot_enabled,
+        breadcrumbs_enabled=row.breadcrumbs_enabled,
         updated_at=row.updated_at,
     )
 

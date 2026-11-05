@@ -22,5 +22,7 @@ class ProgramWidgetSettings(Base):
     auto_detect_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     # Screenshots from origins other than the approved base_url (live sites).
     live_screenshot_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    # Recent user actions (clicks, navigations, ...) sent by the SDK with a report.
+    breadcrumbs_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()

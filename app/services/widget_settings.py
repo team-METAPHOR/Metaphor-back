@@ -17,6 +17,7 @@ _TOGGLES = (
     "public_reporting_enabled",
     "auto_detect_enabled",
     "live_screenshot_enabled",
+    "breadcrumbs_enabled",
 )
 _LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 _READ_ROLES = ("developer", "reviewer", "admin")

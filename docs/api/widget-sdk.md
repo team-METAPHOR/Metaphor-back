@@ -12,7 +12,7 @@
 ──────────────────                                   ────────────
 1. 페이지 로드
    GET /api/v1/widget/config?project_key=mpk_...  →  키·Origin 확인 → 위젯 설정
-   ← 200 { reporting_enabled, screenshot_allowed, auto_detect, limits, mask_selectors }
+   ← 200 { reporting_enabled, screenshot_allowed, auto_detect, limits, mask_selectors, breadcrumbs }
 
 2. 사용자가 "버그 신고" 제출 (또는 SDK가 오류 자동 감지)
    POST /api/v1/widget/reports?project_key=mpk_... → 검사 → 제보 저장 → 검증 작업 대기열 등록
@@ -106,7 +106,8 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
   "mask_selectors": [
     "[data-private]", "[data-sensitive]", "input[type=password]", "input[type=hidden]", "iframe",
     "#card-number"
-  ]
+  ],
+  "breadcrumbs": {"enabled": true, "max_items": 30, "window_ms": 300000}
 }
 ```
 
@@ -118,6 +119,9 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
 | `auto_detect.*` | 자동 오류 감지 허용 여부(현재 네 값은 항상 같음) | `false`면 오류 자동 신고를 하지 않음 |
 | `limits` | 스크린샷 바이트, 설명 글자 수, 마스킹 박스 개수 상한 | 제출 전에 클라이언트에서 미리 검사 |
 | `mask_selectors` | 스크린샷에서 가려야 할 요소의 CSS 선택자 목록 | 캡처 전에 일치하는 요소를 검게 칠함([스크린샷 마스킹](#스크린샷-마스킹)) |
+| `breadcrumbs.enabled` | 관리자가 최근 동작 수집을 켰는지 | `false`면 동작을 기록하지도, 보내지도 않음([최근 동작](#최근-동작breadcrumbs)) |
+| `breadcrumbs.max_items` | 보관·전송할 최근 동작 개수 상한(30) | 링버퍼 크기 |
+| `breadcrumbs.window_ms` | 보관할 시간 범위(300000ms = 5분) | 이보다 오래된 동작은 버림 |
 
 ### 스크린샷 마스킹
 
@@ -151,7 +155,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 | query | `project_key` | 예 | 1–64자 |
 | header | `Origin` | 예 | 브라우저가 자동으로 붙임 |
 | header | `Idempotency-Key` | 아니오(권장) | 1–128자 출력 가능한 문자. 6절 참고 |
-| form | `payload` | 예 | 아래 스키마의 JSON 문자열, UTF-8 기준 **32 KiB 이하** |
+| form | `payload` | 예 | 아래 스키마의 JSON 문자열, UTF-8 기준 **128 KiB 이하** |
 | form | `screenshot` | 아니오 | 이미지 파일 1개. PNG·JPEG·WebP 정지 이미지, **4 MiB 이하**, 각 변 4096px 이하, 전체 800만 화소 이하 |
 
 ### `payload` JSON 스키마
@@ -181,7 +185,10 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
     "viewport": {"width": 1280, "height": 800}          // 선택, 각 1–10000 정수
   },
   "mask_boxes": [[0, 0, 200, 40]],                      // 선택, 최대 20개. screenshot과 함께만
-  "consent": {"environment": true, "screenshot": true}  // 선택, 두 값 모두 기본 false
+  "breadcrumbs": [                                      // 선택, 최대 30개. 보내려면 consent.breadcrumbs = true
+    {"type": "navigation", "t": 9100, "path": "/cart"}  // 형식은 아래 "최근 동작(breadcrumbs)"
+  ],
+  "consent": {"environment": true, "screenshot": true, "breadcrumbs": true} // 선택, 모두 기본 false
 }
 ```
 
@@ -224,6 +231,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 |---|---|---|
 | `screenshot` 파일 | `consent.screenshot = true` | `422 CONSENT_REQUIRED` |
 | `environment` 객체 | `consent.environment = true` | `422 CONSENT_REQUIRED` |
+| `breadcrumbs` 배열(빈 배열 포함) | `consent.breadcrumbs = true` | `422 CONSENT_REQUIRED` |
 
 SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `true`로 보내야 합니다.
 
@@ -236,6 +244,93 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 - 서버가 박스 영역을 검은색으로 칠한 **마스킹본만** 저장하고 AI 분석에 사용합니다. 원본은 저장하지 않습니다.
 - 스크린샷 없이 박스만 보내거나, 박스 값이 4개가 아니거나, 범위를 벗어나면 `422 MASK_BOX_INVALID`.
   21개 이상이거나 좌표가 정수가 아니면 스키마 위반 `422 VALIDATION_FAILED`.
+
+### 최근 동작(breadcrumbs)
+
+신고 직전에 사용자가 한 동작(클릭, 페이지 이동, 입력, 제출)을 보내면 재현 계획의 근거로 씁니다.
+서버는 이 목록을 정리해 AI에게 "사용자 최근 동작" 단계 목록으로 넘깁니다. 막연한 설명("결제가 안 돼요")만
+있을 때 재현율을 가장 크게 올리는 정보입니다.
+
+**수집할 동작**
+
+| `type` | 언제 기록하나 | `target` |
+|---|---|---|
+| `click` | 사용자가 요소를 클릭함(`click` 이벤트, capture 단계) | 필수 |
+| `navigation` | 같은 origin 안에서 페이지가 바뀜. 첫 로드, `history.pushState`/`replaceState`, `popstate`, `hashchange`로 경로가 바뀐 경우 포함 | **넣지 않음** |
+| `input` | 사용자가 입력 필드에 무언가 입력함(`change` 이벤트 기준, 필드당 연속 입력은 1개로 합침). **값 없이 "이 필드에 입력함"만** 기록 | 필수 |
+| `submit` | 폼이 제출됨(`submit` 이벤트) | 필수(그 `form` 요소) |
+
+다른 origin으로 이동하는 경우, 키 입력, 스크롤, 마우스 이동은 기록하지 않습니다.
+
+**보관**
+
+- 메모리 링버퍼에만 둡니다. 최대 `config.breadcrumbs.max_items`(30)개, `window_ms`(5분)보다 오래된 것은 버립니다.
+- `localStorage`·`sessionStorage`·쿠키에 저장하지 않습니다. 페이지를 새로 고치면 사라져도 됩니다.
+- 신고하지 않으면 **어디로도 보내지 않습니다.** 별도 전송 API는 없습니다.
+
+**전송 조건** (모두 만족할 때만 `payload.breadcrumbs`를 넣음)
+
+1. `config.breadcrumbs.enabled`가 `true`
+2. 사용자가 신고 화면에서 "최근 동작 함께 보내기"에 직접 동의함 → `consent.breadcrumbs = true`
+3. 사용자가 신고를 제출함(수동 신고, 또는 자동 감지 신고)
+
+설정이 꺼져 있는데 보내면 `403 BREADCRUMBS_DISABLED`, 동의 없이 보내면 `422 CONSENT_REQUIRED`입니다.
+보낼 동작이 없으면 필드를 빼세요.
+
+**항목 형식**
+
+```jsonc
+{
+  "type": "click",                 // "click" | "navigation" | "input" | "submit"
+  "t": 12400,                      // 필수 정수. 신고 제출 시점 기준 몇 ms 전인지, 0–300000
+  "path": "/products",             // 필수, ≤ 2048자, "/"로 시작. 그때의 location.pathname
+  "target": {                      // navigation이면 넣지 않음, 나머지는 필수
+    "tag": "button",               // 필수, ≤ 16자. element.tagName 소문자
+    "role": "button",              // 선택, ≤ 32자. role 속성
+    "id": "add",                   // 선택, ≤ 128자. id 속성
+    "test_id": "add-to-cart",      // 선택, ≤ 128자. data-testid(또는 data-test-id) 속성
+    "name": "",                    // 선택, ≤ 128자. name 속성
+    "text": "장바구니 담기",        // 선택, ≤ 80자. 보이는 텍스트(innerText 앞부분, 공백 정리). 아래 "텍스트 제외" 참고
+    "selector": "#product-1 > button" // 선택, ≤ 256자. 짧은 CSS 경로
+  }
+}
+```
+
+- 배열 순서는 상관없습니다. 서버가 `t` 기준으로 오래된 것부터 정렬합니다.
+- `path`에는 **경로만** 넣으세요. 쿼리와 fragment를 붙여 보내도 서버가 지우지만, SDK에서 먼저 빼는 것이 원칙입니다.
+- 모든 문자열은 서버가 전화번호·카드번호·이메일·토큰 등을 가린 뒤 저장합니다. 빈 문자열 필드는 저장하지 않습니다.
+- 알 수 없는 필드(예: `value`, `x`, `y`, `key`)가 있거나 길이·범위를 넘으면 `422 VALIDATION_FAILED`,
+  31개 이상도 `422 VALIDATION_FAILED`입니다. `navigation`에 `target`이 있거나 다른 동작에 `target`이 없으면
+  `422 BREADCRUMBS_INVALID`입니다.
+
+**텍스트 제외** (`target.text`를 보내지 않는 요소)
+
+- `input`, `textarea`, `select` 요소, `[contenteditable]` 요소, `role`이 `textbox`·`combobox`·`searchbox`인 요소
+- `config.mask_selectors`의 선택자와 일치하는 요소, 또는 그 안쪽 요소(`element.closest(selector)`로 확인)
+- `type = "input"` 동작 전체
+
+서버도 폼 요소(`tag`가 `input`·`textarea`·`select`, `role`이 `textbox`·`combobox`·`searchbox`, `selector`에
+`contenteditable` 포함)와 `input` 동작의 `text`는 받아도 지우고 저장합니다. 하지만 마스킹 선택자 판단은
+브라우저만 할 수 있으므로 SDK가 반드시 먼저 걸러야 합니다.
+
+**절대 보내지 않음**
+
+- 입력값(`value`, 선택한 옵션, 체크 여부 포함), 키 입력, 붙여넣은 내용
+- 마우스·터치 좌표, 스크롤 위치
+- 쿼리 문자열, fragment, 다른 origin의 URL
+- 요청·응답 본문, 쿠키, 토큰, 헤더(8절과 같음)
+
+**예시** (장바구니에 담고 쿠폰을 입력한 뒤 결제를 누른 경우)
+
+```json
+"breadcrumbs": [
+  {"type": "click", "t": 12400, "path": "/products",
+   "target": {"tag": "button", "test_id": "add-to-cart", "text": "장바구니 담기"}},
+  {"type": "navigation", "t": 9100, "path": "/cart"},
+  {"type": "input", "t": 6000, "path": "/cart", "target": {"tag": "input", "name": "coupon"}},
+  {"type": "submit", "t": 2200, "path": "/cart", "target": {"tag": "form", "id": "checkout"}}
+]
+```
 
 ### 응답
 
@@ -262,13 +357,13 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 먼저 실패한 검사의 오류가 반환됩니다. 디버깅할 때 참고하세요.
 
 1. 요청 크기: `Content-Length` 없음 411, 5 MiB 초과 413
-2. 폼 형식: `project_key`·`payload` 누락, `payload` 32768자 초과 → 422 `VALIDATION_FAILED`(이 응답에는 CORS 허용 헤더가 없음)
+2. 폼 형식: `project_key`·`payload` 누락, `payload` 131072자 초과 → 422 `VALIDATION_FAILED`(이 응답에는 CORS 허용 헤더가 없음)
 3. 키·Origin: 404 `WIDGET_NOT_FOUND`, 403 `ORIGIN_NOT_ALLOWED`
 4. 스크린샷 4 MiB 초과: 413 `UPLOAD_TOO_LARGE`
-5. `payload` 형식(JSON, 32 KiB, 스키마): 422 `VALIDATION_FAILED`
-6. 동의 → 오류 정보 → 마스킹 박스 → 이미지 형식: 422 `CONSENT_REQUIRED` / `ERROR_DETAILS_INVALID` / `MASK_BOX_INVALID` / `INVALID_SCREENSHOT`
+5. `payload` 형식(JSON, 128 KiB, 스키마): 422 `VALIDATION_FAILED`
+6. 동의 → 오류 정보 → 최근 동작 형식 → 마스킹 박스 → 이미지 형식: 422 `CONSENT_REQUIRED` / `ERROR_DETAILS_INVALID` / `BREADCRUMBS_INVALID` / `MASK_BOX_INVALID` / `INVALID_SCREENSHOT`
 7. 서버 설정: 503 `WIDGET_UNAVAILABLE`
-8. 위젯·신고 꺼짐 403 `WIDGET_REPORTING_DISABLED`, 자동 감지 꺼짐 403 `AUTO_DETECT_DISABLED`
+8. 위젯·신고 꺼짐 403 `WIDGET_REPORTING_DISABLED`, 자동 감지 꺼짐 403 `AUTO_DETECT_DISABLED`, 최근 동작 수집 꺼짐 403 `BREADCRUMBS_DISABLED`
 9. 원점 일치 422 `PAGE_URL_ORIGIN_MISMATCH` → 운영 스크린샷 403 `LIVE_SCREENSHOT_DISABLED` → 범위 422 `SCOPE_VIOLATION`
 10. 같은 `Idempotency-Key` 재전송이면 처음 응답 반환(다른 내용이면 409, 키 형식 오류는 400)
 11. 시간당 한도 429 → 중복 병합 200 → 프로그램 상태·AI 허용 422 → 스크린샷·설명 둘 다 없음 422 → 일일 한도 429 → 도메인 소유 미확인 422 → 201
@@ -281,15 +376,17 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 | 403 | `ORIGIN_NOT_ALLOWED` | `Origin` 헤더가 없거나 등록되지 않은 원점. preflight 거절도 이 코드 | 위젯 비활성화. 고객사 관리자에게 원점 등록 안내 |
 | 403 | `WIDGET_REPORTING_DISABLED` | 위젯 또는 공개 신고가 꺼져 있음 | 신고 버튼 숨김. 재시도하지 않음 |
 | 403 | `AUTO_DETECT_DISABLED` | 자동 감지 신고인데 자동 감지가 꺼져 있음 | 자동 신고 중단(`config.auto_detect` 확인) |
+| 403 | `BREADCRUMBS_DISABLED` | 최근 동작 수집이 꺼져 있는데 `breadcrumbs`를 보냄 | `breadcrumbs` 빼고 다시 제출(`config.breadcrumbs.enabled` 확인) |
 | 403 | `LIVE_SCREENSHOT_DISABLED` | 운영(mapped) 원점에서 스크린샷을 보냈는데 운영 스크린샷이 꺼져 있음 | 스크린샷 빼고 다시 제출(`config.screenshot_allowed` 확인) |
 | 404 | `WIDGET_NOT_FOUND` | 키가 없거나 회전되어 무효 | 위젯 비활성화. 고객사에 키 갱신 안내 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 같은 `Idempotency-Key`로 다른 내용을 보냄 | 사용자가 내용을 바꿨다면 새 키 발급 |
 | 411 | `LENGTH_REQUIRED` | `Content-Length` 헤더 없음(스트리밍 업로드 등) | 본문 길이를 알 수 있게 `FormData`/`Blob`으로 전송 |
 | 413 | `REQUEST_TOO_LARGE` | 전체 요청이 5 MiB 초과 | 스크린샷을 줄이거나 빼고 재시도 |
 | 413 | `UPLOAD_TOO_LARGE` | 스크린샷이 4 MiB 초과 | 이미지 압축·축소 후 재시도 |
-| 422 | `VALIDATION_FAILED` | `payload` 누락, JSON 아님, 32 KiB 초과, 스키마 위반(모르는 필드, 길이·형식 초과), `project_key` 누락 | 버그로 보고 수정. 같은 요청을 재시도하지 않음 |
-| 422 | `CONSENT_REQUIRED` | 스크린샷이나 환경 정보를 보냈는데 해당 동의가 `true`가 아님 | 동의 UI 확인 후 다시 제출 |
+| 422 | `VALIDATION_FAILED` | `payload` 누락, JSON 아님, 128 KiB 초과, 스키마 위반(모르는 필드, 길이·형식 초과), `project_key` 누락 | 버그로 보고 수정. 같은 요청을 재시도하지 않음 |
+| 422 | `CONSENT_REQUIRED` | 스크린샷·환경 정보·최근 동작을 보냈는데 해당 동의가 `true`가 아님 | 동의 UI 확인 후 다시 제출 |
 | 422 | `ERROR_DETAILS_INVALID` | `error_type`에 맞지 않는 `error`/`error.http`, 또는 `status`가 500–599가 아님 | 자동 감지 코드 수정 |
+| 422 | `BREADCRUMBS_INVALID` | `navigation`에 `target`이 있거나, `click`·`input`·`submit`에 `target`이 없음 | 동작 기록 코드 수정 |
 | 422 | `MASK_BOX_INVALID` | 박스 값이 4개가 아님, 이미지 범위 밖(`x1 < x2`, `y1 < y2` 아님 포함), 스크린샷 없이 박스만 보냄. 21개 이상이거나 정수가 아니면 `VALIDATION_FAILED` | 좌표 변환(naturalWidth 기준) 확인 |
 | 422 | `INVALID_SCREENSHOT` | PNG·JPEG·WebP 정지 이미지가 아님, 또는 크기 제한(각 변 4096px, 800만 화소) 초과 | 지원 형식으로 변환하거나 스크린샷 없이 제출 |
 | 422 | `SCREENSHOT_OR_DESCRIPTION_REQUIRED` | 스크린샷도 설명도 없음 | 사용자에게 설명 입력 요청 |
@@ -336,6 +433,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 - 요청·응답 **본문**(fetch/XHR body, GraphQL 변수 등)
 - 사용자가 입력창에 쓴 값(폼 값, 비밀번호 칸, 검색어 이외의 개인 정보)
 - `localStorage`, `sessionStorage`, IndexedDB 내용
+- 키 입력, 마우스·터치 좌표. `breadcrumbs`에는 어떤 요소를 눌렀는지만 넣고 입력값은 넣지 않습니다([최근 동작](#최근-동작breadcrumbs))
 - 민감한 쿼리가 담긴 전체 URL. `error.http.path`에는 경로만, `stack_top`에는 스크립트 위치만 넣으세요.
 
 스크린샷을 찍을 때는 `config.mask_selectors`와 입력창 값을 먼저 가리고([스크린샷 마스킹](#스크린샷-마스킹)),

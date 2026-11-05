@@ -73,3 +73,8 @@ def sanitize_text(value: str, max_len: int) -> str:
     if len(value) > max_len:
         raise ApiError(422, "TEXT_TOO_LONG", f"Text must be at most {max_len} characters")
     return redact(value)
+
+
+def strip_query(path: str) -> str:
+    """Drop the fragment and query of a path or URL."""
+    return path.split("#", 1)[0].split("?", 1)[0]

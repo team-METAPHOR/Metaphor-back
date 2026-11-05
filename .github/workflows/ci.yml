@@ -69,7 +69,14 @@ jobs:
 
       - name: Install Chromium for browser tests
         if: hashFiles('tests/e2e/*.py') != ''
-        run: uv run playwright install --with-deps chromium --only-shell
+        # The apt step of --with-deps sometimes hangs on the runner for 10+ minutes.
+        # Cap each try at 3 minutes and retry instead of waiting it out.
+        run: |
+          for attempt in 1 2 3; do
+            timeout 180 uv run playwright install --with-deps chromium --only-shell && exit 0
+            echo "playwright install attempt $attempt failed or timed out; retrying"
+          done
+          exit 1
 
       - name: Tests
         if: hashFiles('tests/**/*.py') != ''

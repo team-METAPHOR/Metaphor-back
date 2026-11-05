@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, StringConstraints
 
@@ -23,3 +23,16 @@ class OrgResponse(BaseModel):
 
 class OrgDetail(OrgResponse):
     member_count: int
+
+
+class MemberResponse(BaseModel):
+    user_id: str
+    email: str
+    display_name: str | None
+    role: str
+    is_active: bool
+    joined_at: datetime
+
+
+class MemberRolePatch(BaseModel):
+    role: Literal["developer", "reviewer", "admin"]

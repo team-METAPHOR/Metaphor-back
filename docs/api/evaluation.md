@@ -24,3 +24,51 @@
 - **AI·엔진·대상 화면에 보내지 않습니다.** 태그는 `reports`와 분리된 `report_eval_tags` 테이블에만 있고, 워커는 이 테이블을 읽지 않습니다. 제보 상세·목록·개발자 전달·작업 응답에도 나오지 않습니다.
 - 위젯으로 접수한 제보도 대시보드에서 제보 id를 찾아 태그를 붙일 수 있습니다. 태그는 접수 뒤에 붙여도 시간 계산은 제보 접수 시각(`reports.created_at`) 기준이라 영향이 없습니다.
 - 위젯 중복 접수로 기존 제보에 합쳐진 제출(`report_duplicates`)은 제보가 아니므로 태그를 붙일 수 없고, 새 QA 건으로 세지 않습니다.
+
+## 제보별 평가 기록
+
+`GET /reports/{report_id}/eval-record` (구성원). 저장된 행(`reports`, `validation_jobs`, `job_events`, `qa_results`, `validation_job_conditions`, `artifacts`)만으로 계산하며 엔진·워커를 호출하지 않습니다. 태그가 없는 제보도 조회할 수 있고 그때 `eval`은 `null`입니다.
+
+### 결과(`outcome`)
+
+QA 작업은 `initial`·`fresh`·`resume`입니다. 수정 재검증(`retest`)은 `retests`로만 세고 QA 결과·재시도·시간 계산에서 뺍니다.
+
+| 값 | 조건 |
+|---|---|
+| `report_ready` | QA 작업 중 하나라도 `completed` (판정이 난 보고서를 조회할 수 있음) |
+| `needs_info` / `inconclusive` / `failed` / `cancelled` | 완료된 QA 작업이 없고 마지막 QA 작업 상태가 그 값 |
+| `timeout` | 마지막 QA 작업이 `failed`이고 오류 코드에 `QA_RUNTIME_LIMIT`·`CONDITION_RUNTIME_LIMIT`·`RUNTIME_LIMIT`·`WORKER_TIMEOUT` 중 하나가 있음. 공급자 시간 초과(`MODEL_TIMEOUT`)는 모델 실패라 `failed` |
+| `unfinished` | 마지막 QA 작업이 `queued`·`running`·`cancelling` |
+| `not_run` | QA 작업이 없음(예: 일일 한도로 주차, `run_blocked: "quota"`) |
+
+`needs_info`(추가 질문)와 `inconclusive`는 보고서 파일이 있어도 성공(`report_ready`)으로 세지 않습니다. 재현 성공과 질문 성공을 합산하지 않기 위해서입니다.
+
+### 1건 처리 시간
+
+- **`processing_ms` = 신고 접수(`received_at` = `reports.created_at`) → 처음으로 `completed`된 QA 작업의 결과 저장(`report_ready_at`)**. `report_ready`일 때만 값이 있습니다.
+- 그 밖의 종료(`failed`·`timeout`·`cancelled`·`needs_info`·`inconclusive`)는 `ended_at`·`ended_ms`(접수 → 마지막 QA 작업 종료)에만 들어갑니다. 성공 건 시간과 섞지 않습니다. `unfinished`·`not_run`은 둘 다 `null`입니다.
+- `report_ready_at`은 `validation_jobs.finished_at`입니다. 워커가 결과·보고서(`report.md`)·스크린샷·영상·JSON 산출물을 **한 트랜잭션**으로 저장하므로, 이 트랜잭션이 커밋되면 보고서와 영상 등 부가 산출물이 함께 조회 가능해집니다. 영상만 늦게 붙는 경우는 없습니다. 이 값은 트랜잭션 시작 시각(PostgreSQL `now()`)이라 실제 커밋보다 산출물 저장 시간만큼 이를 수 있습니다(보통 1초 미만).
+- `retries` = QA 작업 수 − 1. 자동 재생성(`fresh`, 불확실 판정 뒤)은 작업의 `automatic: true`로 구분됩니다. `claims`는 같은 작업을 워커가 가져간 횟수입니다.
+- 위젯 중복 접수는 `duplicate_submissions`로만 보이고 QA 건수에 들어가지 않습니다.
+
+### 작업별 구간(`jobs[].timing`, ms)
+
+| 필드 | 구간 |
+|---|---|
+| `queue_wait_ms` | 작업 생성(`queued_at`) → 워커 claim(`claimed_at`) |
+| `setup_ms` | claim → 첫 엔진 이벤트. 계정별 실행 잠금 대기, 테스트 계정 열기, 엔진 준비 |
+| `engine_ms` | 첫 엔진 이벤트 → 엔진 종료 이벤트 |
+| `model_ms` | 엔진이 잰 모델 호출 시간 합(`timings.model_seconds`) |
+| `browser_ms` | 브라우저 재현 시도 2회의 `elapsed_seconds` 합 |
+| `login_reset_ms` | 엔진이 따로 보고하지 않아 항상 `null`(unknown) |
+| `persist_ms` | 엔진 종료 → 결과 저장 |
+| `total_ms` | 작업 생성 → 결과 저장 |
+
+엔진이 결과를 내지 못한 실패(워커 오류, 리스 만료 `WORKER_LOST` 등)는 엔진 시각·모델 호출이 비어 있고 `result_available: false`입니다. 보존 기간이 지나 원시 결과가 지워진 작업도 `result_available: false`입니다.
+
+### 오류 코드와 모델 호출
+
+- `jobs[].error_codes`는 그 작업에서 나온 코드를 순서대로 모두 남깁니다: 워커(`backend_error_code`) → 엔진(`error_code`) → 재현 시도별 차단 코드(`TRANSPORT_ERROR`, `STEP_OR_READINESS_FAILED` 등) → 계획 검토 오류 → 실패한 모델 호출 상태. 공급자 429, 엔진 호출/토큰 상한(`MODEL_CALL_LIMIT`·`MODEL_TOKEN_LIMIT`), 브라우저 실패를 하나로 합치지 않습니다. 제보의 `error_codes`는 QA 작업 전체의 합집합입니다.
+- `jobs[].model_calls[]`: `phase`, `role`(primary/critic), `status`, `model`(공급자가 돌려준 실제 모델 ID, 실패 시 `null`), `configured_model`(워커 설정 모델 ID, 준비 확인 스냅샷이 붙기 전까지 `null`), `usage_known`, `input_tokens`/`output_tokens`(사용량이 없으면 `null`, 0으로 취급하지 않음), `latency_ms`, `retry_after_seconds`(429의 Retry-After).
+- `plan_review`는 `{enabled, status, error_code}`만 보여 줍니다. 비판 모델 사용 여부는 이 `enabled`로 확인합니다.
+- 엔진 job id, 저장 경로, 범위 스냅샷, 모델 요청·응답 본문은 넣지 않습니다. 정제된 JSON 결과는 `result_url`, 증거 목록은 `artifacts_url`로 받습니다.

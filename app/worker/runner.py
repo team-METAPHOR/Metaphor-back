@@ -17,6 +17,7 @@ from pathlib import Path
 import psycopg
 from core_engine import (
     BrowserOptions,
+    BudgetLimits,
     ConditionLimits,
     ConditionsService,
     GroqModel,
@@ -154,6 +155,17 @@ def build_policy(snapshot: dict) -> RunPolicy:
     )
 
 
+# Engine browser budget at its ceilings. The engine default (2 concurrent, 60 total) aborts an
+# attempt as soon as a normal SPA loads its HTML, JS and CSS in parallel (CONCURRENCY_LIMIT).
+# ponytail: ceilings are fixed by the engine; waiting instead of failing needs an engine change.
+BROWSER_LIMITS = BudgetLimits(
+    max_runtime_seconds=120,
+    max_requests_per_minute=120,
+    max_concurrent_requests=4,
+    max_total_requests=300,
+)
+
+
 def build_service(
     snapshot: dict,
     store: JobStore,
@@ -178,7 +190,9 @@ def build_service(
         if login_applies(snapshot["test_context_id"], snapshot.get("session_secret_ref"))
         else None,
     )
-    return QAService(model, policy, store, options=options, reviewer=reviewer)
+    return QAService(
+        model, policy, store, options=options, reviewer=reviewer, browser_limits=BROWSER_LIMITS
+    )
 
 
 class Monitor(threading.Thread):
@@ -440,6 +454,7 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
             ),
             reviewer=reviewer,
             limits=ConditionLimits(max_conditions=snapshot["max_conditions"]),
+            browser_limits=BROWSER_LIMITS,
         )
         reset = matrix.condition_reset(snapshot, RESETS)
         contexts = sorted({c["test_context_id"] for c in conditions})

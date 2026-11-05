@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     ip_hash_secret: str = Field(default="", repr=False)
     # Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is trusted for the client IP.
     trusted_proxies: list[str] = []
+    # RSA (>= 3072) public key PEM that seals program test accounts. Not secret: only the
+    # worker's TEST_ACCOUNT_PRIVATE_KEY can open them. Unset → PUT test-account returns 503.
+    test_account_public_key: str = Field(default="", repr=False)
     lease_seconds: int = 30
     # Engine QA limit (180s) plus cleanup headroom.
     worker_hard_deadline_seconds: int = 210

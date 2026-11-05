@@ -108,8 +108,14 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 
 ## 5. Security rules
 
-- Secrets (`OPENAI_API_KEY`, `GROQ_API_KEY`, `QA_SESSION_<REF>` test session headers) exist only in the worker
-  environment. Never in API settings, responses, logs, queue rows, or tests' snapshots.
+- Secrets (`OPENAI_API_KEY`, `GROQ_API_KEY`, `QA_SESSION_<REF>` test session headers,
+  `TEST_ACCOUNT_PRIVATE_KEY`) exist only in the worker environment. Never in API settings,
+  responses, logs, queue rows, or tests' snapshots.
+- Program test accounts (login id + password) are the one customer secret stored in the DB, and
+  only sealed (`app/core/test_account_crypto.py`: AES-256-GCM + RSA-OAEP, bound to program id,
+  version and key id). The API holds only `TEST_ACCOUNT_PUBLIC_KEY` and can seal but never
+  open; only the worker decrypts. Never return, log or audit the password, full login id,
+  ciphertext or keys; validation errors never echo input.
 - Uploaded screenshots: validate with `core_engine.Screenshot`, apply reporter `mask_boxes`
   with `Screenshot.masked`, persist **only** the masked image. Never keep the raw upload.
 - Store report text only after `redact_text`. Length limits apply to the raw input.

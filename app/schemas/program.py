@@ -81,7 +81,11 @@ class ScopeResponse(BaseModel):
     approved_app_versions: list[str]
     test_context_id: str
     mask_selectors: list[str]
+    # A login is available for runs: an operator-provisioned session or a saved test account.
     has_session: bool
+    # A test account is saved (GET /programs/{id}/test-account has the details; its `in_use`
+    # tells whether runs apply it yet).
+    has_test_account: bool = False
     reset_adapter: str
     created_at: datetime
 

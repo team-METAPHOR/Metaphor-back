@@ -157,6 +157,8 @@ def build_service(
         session_headers=load_session_headers(
             snapshot["org_id"], snapshot.get("session_secret_ref")
         ),
+        # ponytail: a saved program test account (app/worker/test_accounts.load_test_account)
+        # plugs in here once the engine can log in with id/password; until then it is unused.
     )
     return QAService(model, policy, store, options=options, reviewer=reviewer)
 

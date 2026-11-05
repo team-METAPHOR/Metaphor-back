@@ -73,11 +73,13 @@ uv run uvicorn app.main:app --reload
 ### 환경 변수 (API)
 
 - `IP_HASH_SECRET`: 위젯 신고자 IP를 HMAC-SHA256으로 해시할 때 쓰는 키입니다. 원본 IP는 저장하지 않습니다. 비어 있으면 위젯 신고 API가 503 `WIDGET_UNAVAILABLE`을 반환합니다. 환경마다 긴 무작위 값을 넣으세요.
+- `TEST_ACCOUNT_PUBLIC_KEY`: 프로그램 테스트 계정을 암호화하는 RSA(3072비트 이상) 공개키 PEM입니다. 비밀값은 아닙니다. 한 줄로 넣을 때는 줄바꿈을 `\n`으로 적습니다. 비어 있으면 `PUT /programs/{id}/test-account`가 503 `TEST_ACCOUNT_UNAVAILABLE`을 반환합니다. 키 생성은 `uv run python -m app.worker.keys <디렉터리>`([테스트 계정 API](docs/api/test-account.md)).
 - 프록시·로드밸런서 뒤에서는 `uvicorn --proxy-headers --forwarded-allow-ips=<LB IP>`로 실행해야 IP별 신고 한도가 실제 클라이언트 기준으로 동작합니다.
 
 ### 환경 변수 (워커 전용)
 
 - `OPENAI_API_KEY`, `OPENAI_MODEL`: 주 모델입니다.
+- `TEST_ACCOUNT_PRIVATE_KEY`: `TEST_ACCOUNT_PUBLIC_KEY`와 짝인 개인키 PEM입니다. 저장된 테스트 계정을 복호화할 수 있는 유일한 키이므로 워커 환경에만 둡니다. 엔진이 아직 아이디·비밀번호 로그인을 지원하지 않아 현재 실행에는 쓰이지 않습니다.
 - `QA_CRITIC_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_MODEL`: 실행 전에 재현 계획을 검토하는 비판 모델입니다. 비워 두면 검토하지 않습니다. 설정했는데 키나 모델이 잘못되면 작업은 `CRITIC_CONFIG_INVALID`로 실패하며, 단일 모델로 몰래 바꿔 실행하지 않습니다.
 - 공급자 오류(`MODEL_RATE_LIMITED`, `MODEL_AUTH_FAILED`, `MODEL_TIMEOUT` 등)로 결론이 나지 않은 작업에는 자동 재생성(`auto_fresh`)을 걸지 않습니다.
 

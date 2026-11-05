@@ -7,9 +7,10 @@ Read this file fully before changing code.
 
 Metaphor is a screenshot-driven web QA service.
 
-- A **reporter** submits a bug report for a customer's web app: a screenshot, a text
-  description, or both. Reports arrive from the Metaphor platform (logged-in users) or from the
-  **Metaphor Web SDK** installed on a customer site (anonymous, identified by a public project key).
+- A bug report for a customer's web app is a screenshot, a text description, or both. Reports
+  arrive from the **Metaphor Web SDK** installed on a customer site (anonymous, identified by a
+  public project key) or from customer org members filing them manually in the Metaphor dashboard.
+  There are no external reporters: logged-in users outside the owner org cannot submit or read.
 - The backend stores the report and enqueues a **validation job**.
 - A separate Python **worker** runs `metaphor-core-engine` (`QAService`), which interprets the
   report with an AI model, plans steps, reproduces the bug twice in fresh Playwright browser
@@ -28,10 +29,10 @@ notifications, external issue creation.
 | Organization (org) | Customer company that owns programs and sees results |
 | Program | One customer web app under test. `id` doubles as engine `program_id` |
 | Scope revision | Immutable snapshot of approved origin, path prefixes, viewport, test context, masks |
-| Report | A bug submission. `source` = `platform` or `widget` |
+| Report | A bug submission. `source` = `platform` (org member, `author_id` set) or `widget` |
 | Validation job | One engine execution. `kind` = `initial` / `fresh` / `resume` / `retest` |
 | Engine job id | 32-hex id created by the engine's `JobStore`; mapped to our job id, never exposed |
-| Artifact | Stored file (input image, report.md, screenshots, JSON) with owner and visibility |
+| Artifact | Stored file (input image, report.md, screenshots, JSON) owned by an org |
 | Widget settings | Per-program Web SDK config: public project key, allowed origins, toggles |
 
 ## 3. Architecture
@@ -95,6 +96,8 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 - Every job creation goes through the shared `create_job` service (daily limit, active-job check).
 - Every report creation goes through the shared `create_report` service (platform and widget).
 - Cross-org access returns **404**, not 403, so existence is not leaked.
+- Programs, platform report submission, reports, jobs and evidence are for active members of
+  the owner org only. Roles then gate writes (e.g. answer/rerun/cancel: reviewer or admin).
 - Anonymous widget reporters can never read results, jobs, evidence, or other reports.
 - Engine internals (`_baseline`, `_parent`) are never called directly. Use `run/resume/retest`.
 

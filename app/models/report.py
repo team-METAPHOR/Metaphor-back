@@ -24,6 +24,9 @@ ORIGIN_KINDS = ("approved", "mapped")
 # closed: 마감 — set by a person, only once a retest verified the fix.
 WORKFLOW_STATUSES = ("received", "fixing", "dismissed", "closed")
 MANUAL_WORKFLOW_STATUSES = ("received", "fixing", "dismissed")
+# Why a stored report has no job yet. quota: the daily job limit or widget daily cap was hit at
+# creation; a rerun (fresh) starts it later and clears the flag.
+RUN_BLOCKED_REASONS = ("quota",)
 
 
 class Report(Base):
@@ -33,6 +36,7 @@ class Report(Base):
         one_of("error_type", ERROR_TYPES, "error_type"),
         one_of("origin_kind", ORIGIN_KINDS, "origin_kind"),
         one_of("workflow_status", WORKFLOW_STATUSES, "workflow_status"),
+        one_of("run_blocked", RUN_BLOCKED_REASONS, "run_blocked"),
         CheckConstraint("source <> 'platform' OR author_id IS NOT NULL", name="platform_author"),
         Index("ix_reports_program_fingerprint", "program_id", "fingerprint", "created_at"),
         Index("ix_reports_program_ip", "program_id", "client_ip_hash", "created_at"),
@@ -62,6 +66,7 @@ class Report(Base):
     latest_job_id: Mapped[str | None] = mapped_column(String(ID_LENGTH))
     workflow_status: Mapped[str] = mapped_column(String(20), server_default="received")
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_blocked: Mapped[str | None] = mapped_column(String(20))
     # Kept (and still shown) when the member is later deactivated; no cascade.
     assignee_id: Mapped[str | None] = fk("users.id", nullable=True, ondelete="SET NULL")
     error_type: Mapped[str] = mapped_column(String(30), server_default="manual")

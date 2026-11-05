@@ -19,12 +19,22 @@
 | `dismissed` | 상관없음 | `dismissed` | (단계 밖: 버그 아님·중복) |
 | `received` / `fixing` | 상관없음, `fix_verified: true` | `verified` | 수정 확인됨 (마감 대기) |
 | `fixing` | 상관없음 | `fixing` | 버그 수정 중 |
+| `received` | 없음, 한도 대기로 주차됨 | `waiting_quota` | 신규 신고 (한도 대기) |
 | `received` | 없음 | `new` | 신규 신고 |
 | `received` | `queued` / `running` / `cancelling` | `reproducing` | 재현 중 |
 | `received` | 끝남, 판정 `reproduced` | `reproduced` | 재현 완료 |
 | `received` | 끝남, 그 밖의 판정 또는 판정 없음 | `triaged` | 재현 완료 (재현되지 않음) |
 
 "끝남"은 `completed` / `inconclusive` / `needs_info` / `failed` / `cancelled`입니다.
+
+## 한도 대기 (`waiting_quota`)
+
+- 제보를 만들 때 프로그램의 일일 검증 실행 한도(`DAILY_LIMIT_EXCEEDED`)나 위젯 일일 상한(`WIDGET_DAILY_LIMITED`, 실행 한도의 절반)에 걸려도 거절하지 않습니다. 제보는 저장하고 검증 작업만 만들지 않습니다. 이것을 "주차"라고 부릅니다.
+- 주차된 제보는 `reports.run_blocked = "quota"`(마이그레이션 0011)이고, `workflow_status`가 `received`이면 `progress`는 `waiting_quota`입니다. 감사 로그 `report.parked` `{reason: "quota", code}`가 남습니다(`code`는 걸린 한도).
+- 플랫폼 `POST /reports` 응답은 성공과 같은 201이지만 `validation_job_id: null`, `status: "waiting_quota"`입니다.
+- 위젯 `POST /widget/reports` 응답은 성공과 똑같은 201 `{receipt_id, status: "received", created_at}`입니다. 고객사가 한도를 넘었다는 사실을 익명 신고자에게 알리지 않습니다.
+- 시간당 남용 한도(`REPORT_RATE_LIMITED`, `WIDGET_IP_RATE_LIMITED`, `WIDGET_PROJECT_RATE_LIMITED`)는 그대로 429로 거절합니다.
+- 나중에 실행하려면 기존 재실행 API `POST /reports/{id}/validation-jobs {"mode": "fresh"}`(reviewer, admin)를 씁니다. 여전히 한도를 넘으면 429 `DAILY_LIMIT_EXCEEDED`이고 제보는 계속 주차 상태입니다. 작업이 만들어지면 `run_blocked`가 지워집니다. 실행 모드는 `fresh`만 받습니다(`initial` 없음).
 
 ## 수정 확인 (`fix_verified`)
 

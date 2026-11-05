@@ -436,7 +436,7 @@ async def test_project_rate_limit_429(client, db_session, world):
     assert response.json()["error"]["code"] == "WIDGET_PROJECT_RATE_LIMITED"
 
 
-async def test_widget_respects_daily_job_limit_429(client, db_session, world):
+async def test_widget_respects_daily_job_limit_parks(client, db_session, world):
     # Widget cap is 2 of 4; three platform jobs leave one slot of the day's budget.
     await db_session.execute(
         update(Program).where(Program.id == world["program"].id).values(daily_job_limit=4)
@@ -455,12 +455,16 @@ async def test_widget_respects_daily_job_limit_429(client, db_session, world):
         )
         assert response.status_code == 201, response.text
     assert (await post(client, world["key"], payload())).status_code == 201
+    # Over the program's job budget: stored and parked (no job), same 201 receipt.
     response = await post(client, world["key"], payload(title="second"))
-    assert response.status_code == 429
-    assert response.json()["error"]["code"] == "DAILY_LIMIT_EXCEEDED"
+    assert (response.status_code, response.json()["status"]) == (201, "received")
+    report = await db_session.scalar(
+        select(Report).where(Report.public_receipt_id == response.json()["receipt_id"])
+    )
+    assert (report.run_blocked, report.latest_job_id) == ("quota", None)
 
 
-async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session, world):
+async def test_widget_daily_cap_keeps_half_of_job_budget(client, db_session, world):
     await db_session.execute(
         update(Program).where(Program.id == world["program"].id).values(daily_job_limit=5)
     )
@@ -468,8 +472,9 @@ async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session,
     for i in range(2):  # max(1, 5 // 2) == 2
         assert (await post(client, world["key"], payload(title=f"t{i}"))).status_code == 201
     response = await post(client, world["key"], payload(title="third"))
-    assert response.status_code == 429
-    assert response.json()["error"]["code"] == "WIDGET_DAILY_LIMITED"
+    assert (response.status_code, response.json()["status"]) == (201, "received")
+    jobs = await db_session.scalar(select(func.count()).select_from(ValidationJob))
+    assert jobs == 2  # the third widget report is parked
     # The customer's own platform reruns still have budget left.
     _, dev_h = await login_as(client, db_session, world["org"], "developer")
     platform = await client.post(
@@ -482,6 +487,7 @@ async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session,
         headers=dev_h,
     )
     assert platform.status_code == 201, platform.text
+    assert platform.json()["validation_job_id"] is not None
 
 
 # extras

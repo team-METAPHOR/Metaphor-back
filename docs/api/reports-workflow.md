@@ -79,3 +79,55 @@
 - 생성할 때 `organizations.report_seq`를 원자적으로 1 올려 받으므로 동시에 생성해도 겹치지 않습니다. 생성이 롤백되면 번호가 비어 있을 수 있습니다(의도된 동작).
 - 기존 제보는 마이그레이션 0009에서 회사별 `created_at`, `id` 순서로 번호를 받았습니다.
 - `GET /orgs/{org_id}/reports/{number}` (구성원) → 200, `GET /reports/{id}`와 같은 응답입니다. 없거나 비구성원이면 404, `number < 1`이면 422입니다.
+
+## 제보 목록 필터·페이지 (`GET /reports`)
+
+구성원인 회사의 제보만 최신순으로 돌려줍니다. 필터는 모두 함께 쓸 수 있습니다.
+
+| 파라미터 | 뜻 |
+|---|---|
+| `progress` | 여러 번 줄 수 있습니다(`?progress=new&progress=reproduced`). 값: `new` `reproducing` `reproduced` `triaged` `verified` `waiting_quota` `fixing` `dismissed` `closed`. `verified`·`waiting_quota`는 지금은 받기만 하고 아무 제보도 맞지 않습니다. 그 밖의 값은 422 `VALIDATION_FAILED`. |
+| `include_closed` | 기본 `false`. 마감(`closed`) 제보는 기본으로 빠지고, `include_closed=true`이거나 `progress`에 `closed`가 있을 때만 나옵니다. |
+| `from` / `to` | `created_at` 범위(ISO 8601). `from`은 포함, `to`는 제외. 시간대가 없으면 UTC로 봅니다. `from > to`이면 422. |
+| `q` | 제목·설명에서 대소문자 구분 없이 찾습니다. `%`, `_`도 글자 그대로 찾습니다. 최대 100자(넘으면 422). |
+| `source` / `program_id` / `assignee` | 기존 필터 그대로입니다. |
+
+`progress`는 저장된 열이 아니라 계산 값이지만, 필터는 SQL에서 같은 규칙(`progress_case`, `app/services/reports.py`)으로 걸러서 `total`과 페이지가 정확합니다.
+
+### 페이지
+
+- **페이지 번호 방식**(목록 화면용): `page`(1부터, 기본 1) + `limit`(1~100, 기본 20). 응답에 `page`와 조건에 맞는 전체 개수 `total`이 들어갑니다. 범위를 넘은 페이지는 `items: []`.
+- **커서 방식**(기존): `cursor`를 주면 예전처럼 동작하고 `total`·`page`는 `null`입니다. `cursor`와 `page`를 함께 주면 422.
+- 두 방식 모두 뒤에 행이 더 있으면 `next_cursor`를 줍니다.
+
+```json
+{"items": [...], "next_cursor": "eyJ...", "total": 37, "page": 1}
+```
+
+## 회사 대시보드 요약 (`GET /orgs/{org_id}/report-summary`)
+
+구성원만 볼 수 있고, 아니면 404 `NOT_FOUND`입니다.
+
+```json
+{
+  "counts": {"new": 3, "reproducing": 1, "reproduced": 4, "triaged": 2,
+             "fixing": 1, "dismissed": 0, "closed": 5},
+  "needs_attention": [{"id": "…", "number": 12, "title": "…", "progress": "reproduced"}]
+}
+```
+
+- `counts`: 회사의 모든 제보(마감 포함)를 `progress`별로 셉니다. 모든 값이 키로 있고 없으면 0입니다. "재현 완료" 카드는 `reproduced + triaged`, "재현 중"은 `reproducing`, "신규"는 `new`입니다.
+- `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`이거나, 처리 상태가 `received`이고 최신 작업이 `needs_info`(질문에 답해야 함)인 제보입니다.
+
+## 회사 재현 통계 (`GET /orgs/{org_id}/report-stats?days=7`)
+
+구성원만 볼 수 있습니다. `days`는 1~90으로 맞춰 씁니다(범위 밖이면 오류 대신 가까운 끝값). 기간은 작업·제보의 `created_at` 기준입니다.
+
+| 필드 | 계산 |
+|---|---|
+| `auto_reproduction_rate` | 기간 안에 만들어져 끝난 `initial` 작업 중, 그 제보가 끝난 `initial`/`fresh` 작업에서 `reproduced` 판정을 받은 비율(0~1). 대상이 없으면 `null`. |
+| `avg_reproduction_seconds` | 같은 `initial` 작업들의 `finished_at - created_at` 평균(초). 없으면 `null`. |
+| `fix_verified_count` | 기간 안의 `retest` 중 `completed` + `not_reproduced`(수정 확인)인 개수. |
+| `by_page` | 기간 안 제보의 페이지 경로 상위 10개 `[{path, count}]`(많은 순, 같으면 경로순). 위젯 `client_context.reported_url`, 없으면 `target_url`의 경로(쿼리·프래그먼트 제외). |
+
+"끝난"은 `completed` / `inconclusive` / `needs_info` / `failed`이고, `cancelled`는 재현 시도로 보지 않아 뺍니다.

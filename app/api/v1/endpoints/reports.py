@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, Header, Query, UploadFile
@@ -9,6 +10,7 @@ from app.schemas.report import (
     ClarificationCreate,
     JobQueued,
     JobRequest,
+    Progress,
     ReportCreated,
     ReportDetail,
     ReportList,
@@ -58,7 +60,16 @@ async def list_reports(
     source: Literal["platform", "widget"] | None = None,
     program_id: str | None = None,
     assignee: Annotated[str | None, Query(max_length=64, description='"me" or a user id')] = None,
+    progress: Annotated[list[Progress] | None, Query()] = None,
+    include_closed: bool = False,
+    created_from: Annotated[datetime | None, Query(alias="from")] = None,
+    created_to: Annotated[datetime | None, Query(alias="to")] = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    page: Annotated[int | None, Query(ge=1)] = None,
 ):
+    """Closed reports are hidden unless `include_closed=true` or `progress=closed`.
+    `from` is inclusive, `to` exclusive (created_at). Without `cursor` the response is
+    page-numbered (`page`, `total`)."""
     return await service.list_reports(
         db,
         user.id,
@@ -67,6 +78,12 @@ async def list_reports(
         source=source,
         program_id=program_id,
         assignee=assignee,
+        progress=progress,
+        include_closed=include_closed,
+        created_from=created_from,
+        created_to=created_to,
+        q=q,
+        page=page,
     )
 
 

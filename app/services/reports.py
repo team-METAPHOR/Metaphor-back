@@ -5,7 +5,9 @@ import json
 import secrets
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 
+from sqlalchemy import ColumnElement, and_, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
@@ -18,7 +20,18 @@ from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import orgs as orgs_repo
 from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
-from app.schemas.report import Assignee, ReportCreated, ReportDetail, ReportItem, ReportList
+from app.schemas.report import (
+    Assignee,
+    AttentionItem,
+    PageCount,
+    Progress,
+    ReportCreated,
+    ReportDetail,
+    ReportItem,
+    ReportList,
+    ReportStats,
+    ReportSummary,
+)
 from app.schemas.validation_job import JobBrief
 from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
@@ -264,6 +277,29 @@ def report_progress(
     return "reproduced" if job.verdict == "reproduced" else "triaged"
 
 
+PROGRESS_VALUES: tuple[str, ...] = get_args(Progress)
+
+
+def progress_case(workflow_status, job_id, job_status, job_verdict) -> ColumnElement:
+    """SQL twin of `report_progress` (keep both in step; a test checks every combination).
+    Arguments are SQL expressions for the report's workflow_status and its latest job's id,
+    status and verdict (all NULL when there is no job)."""
+    return case(
+        (workflow_status.in_(("closed", "dismissed", "fixing")), workflow_status),
+        (job_id.is_(None), "new"),
+        (job_status.in_(ACTIVE_JOB_STATUSES), "reproducing"),
+        (job_verdict == "reproduced", "reproduced"),
+        else_="triaged",
+    )
+
+
+def report_progress_sql() -> ColumnElement:
+    """`progress_case` over `Report` and its latest `ValidationJob` (outer-joined)."""
+    return progress_case(
+        Report.workflow_status, ValidationJob.id, ValidationJob.status, ValidationJob.verdict
+    )
+
+
 def _assignee(user: User | None, active: bool | None) -> Assignee | None:
     if user is None:
         return None
@@ -299,6 +335,13 @@ def _item(
     }
 
 
+def _utc(moment: datetime | None) -> datetime | None:
+    """Naive query datetimes are read as UTC."""
+    if moment is not None and moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment
+
+
 async def list_reports(
     db: AsyncSession,
     user_id: str,
@@ -308,27 +351,113 @@ async def list_reports(
     source: str | None,
     program_id: str | None,
     assignee: str | None = None,
+    progress: list[str] | None = None,
+    include_closed: bool = False,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    q: str | None = None,
+    page: int | None = None,
 ) -> ReportList:
-    """`assignee` is a user id, or "me" for the caller."""
+    """`assignee` is a user id, or "me" for the caller. Closed reports are left out unless
+    `include_closed` or `progress` asks for them. With `cursor` the list is cursor-paged
+    (no total); otherwise `page` (default 1) is used and `total` is returned."""
+    if cursor and page is not None:
+        raise ApiError(422, "VALIDATION_FAILED", "cursor와 page는 함께 쓸 수 없습니다.")
+    created_from, created_to = _utc(created_from), _utc(created_to)
+    if created_from and created_to and created_from > created_to:
+        raise ApiError(422, "VALIDATION_FAILED", "from은 to보다 늦을 수 없습니다.")
     position = decode_cursor(cursor) if cursor else None
+    where = reports_repo.filters(
+        source=source,
+        program_id=program_id,
+        assignee_id=user_id if assignee == "me" else assignee,
+        created_from=created_from,
+        created_to=created_to,
+        q=q,
+    )
+    if progress:
+        where.append(report_progress_sql().in_(progress))
+    elif not include_closed:
+        where.append(Report.workflow_status != "closed")
+    page_no = None if cursor else (page or 1)
     async with db.begin():
         rows = await reports_repo.list_visible(
             db,
             user_id,
             limit=limit,
             cursor=position,
-            source=source,
-            program_id=program_id,
-            assignee_id=user_id if assignee == "me" else assignee,
+            offset=(page_no - 1) * limit if page_no else 0,
+            where=where,
         )
+        total = await reports_repo.count_visible(db, user_id, where) if page_no else None
         verified = await reports_repo.fix_verified_ids(db, [row[0].id for row in rows[:limit]])
-    page = rows[:limit]
+    page_rows = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
-        last = page[-1][0]
+        last = page_rows[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(*row, fix_verified=row[0].id in verified)) for row in page]
-    return ReportList(items=items, next_cursor=next_cursor)
+    items = [ReportItem(**_item(*row, fix_verified=row[0].id in verified)) for row in page_rows]
+    return ReportList(items=items, next_cursor=next_cursor, total=total, page=page_no)
+
+
+async def _require_member(db: AsyncSession, user_id: str, org_id: str) -> None:
+    if await org_role(db, user_id, org_id) is None:
+        raise ApiError(404, "NOT_FOUND", "조직을 찾을 수 없습니다.")
+
+
+ATTENTION_LIMIT = 5
+
+
+def needs_attention_sql() -> ColumnElement:
+    """Reproduced, or still `received` with the latest job waiting for an answer."""
+    return or_(
+        report_progress_sql() == "reproduced",
+        and_(Report.workflow_status == "received", ValidationJob.status == "needs_info"),
+    )
+
+
+async def report_summary(db: AsyncSession, user_id: str, org_id: str) -> ReportSummary:
+    async with db.begin():
+        await _require_member(db, user_id, org_id)
+        counts = await reports_repo.count_by(db, org_id, report_progress_sql())
+        rows = await reports_repo.newest_matching(
+            db, org_id, needs_attention_sql(), ATTENTION_LIMIT
+        )
+    return ReportSummary(
+        counts={value: counts.get(value, 0) for value in PROGRESS_VALUES},
+        needs_attention=[
+            AttentionItem(
+                id=report.id,
+                number=report.number,
+                title=report.title,
+                progress=report_progress(report.workflow_status, job),
+            )
+            for report, job in rows
+        ],
+    )
+
+
+STATS_MAX_DAYS = 90
+TOP_PAGES = 10
+
+
+async def report_stats(db: AsyncSession, user_id: str, org_id: str, days: int) -> ReportStats:
+    days = min(max(days, 1), STATS_MAX_DAYS)
+    window_start = datetime.now(UTC) - timedelta(days=days)
+    async with db.begin():
+        await _require_member(db, user_id, org_id)
+        finished, reproduced, avg_seconds = await reports_repo.reproduction_stats(
+            db, org_id, window_start
+        )
+        verified = await reports_repo.count_passed_retests(db, org_id, window_start)
+        pages = await reports_repo.top_pages(db, org_id, window_start, TOP_PAGES)
+    return ReportStats(
+        days=days,
+        auto_reproduction_rate=reproduced / finished if finished else None,
+        avg_reproduction_seconds=avg_seconds,
+        fix_verified_count=verified,
+        by_page=[PageCount(path=path, count=n) for path, n in pages],
+    )
 
 
 async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDetail:

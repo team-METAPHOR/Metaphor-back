@@ -1,7 +1,7 @@
 """program_test_accounts: one sealed test login per program (worker-only private key)
 
-Revision ID: 0019
-Revises: 0014
+Revision ID: 0016
+Revises: 0015
 Create Date: 2026-11-05 16:31:50
 
 The login id and password are stored only as RSA-OAEP + AES-256-GCM ciphertext bound to
@@ -13,8 +13,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0019"
-down_revision: str | Sequence[str] | None = "0014"
+revision: str = "0016"
+down_revision: str | Sequence[str] | None = "0015"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

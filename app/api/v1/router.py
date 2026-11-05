@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     auth,
     evidence,
     health,
+    orgs,
     programs,
     reports,
     validation_jobs,
@@ -20,6 +21,7 @@ api_router.include_router(widget.router)
 # Cookie-auth routes. /widget/* mounts on api_router directly: no cookies, no CSRF guard.
 platform_router = APIRouter(dependencies=[Depends(require_csrf)])
 platform_router.include_router(auth.router)
+platform_router.include_router(orgs.router)
 platform_router.include_router(programs.router)
 platform_router.include_router(widget_settings.router)
 platform_router.include_router(reports.router)

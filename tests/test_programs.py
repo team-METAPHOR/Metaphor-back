@@ -61,7 +61,11 @@ async def test_admin_creates_program_rev1(client, world, db_session):
     assert "allow_private_targets" not in response.text
     row = await db_session.get(ProgramScopeRevision, (body["id"], 1))
     assert row.base_url == "https://staging.example.com/"
-    actions = (await db_session.scalars(select(AuditEvent.action))).all()
+    actions = (
+        await db_session.scalars(
+            select(AuditEvent.action).where(AuditEvent.action.not_like("auth.%"))
+        )
+    ).all()
     assert actions == ["program.create"]
 
 
@@ -170,7 +174,13 @@ async def test_patch_status_or_same_scope_keeps_revision(client, world, db_sessi
     assert response.json()["name"] == "Shop 2"
     revisions = (await db_session.scalars(select(ProgramScopeRevision.revision))).all()
     assert revisions == [1]
-    actions = (await db_session.scalars(select(AuditEvent.action).order_by(AuditEvent.id))).all()
+    actions = (
+        await db_session.scalars(
+            select(AuditEvent.action)
+            .where(AuditEvent.action.not_like("auth.%"))
+            .order_by(AuditEvent.id)
+        )
+    ).all()
     assert actions == ["program.create", "program.update"]
 
 

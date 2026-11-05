@@ -32,7 +32,15 @@ async def patch(client, world, who="admin", **body):
 
 
 async def audit_actions(db_session) -> list[str]:
-    return list((await db_session.scalars(select(AuditEvent.action).order_by(AuditEvent.id))).all())
+    return list(
+        (
+            await db_session.scalars(
+                select(AuditEvent.action)
+                .where(AuditEvent.action.not_like("auth.%"))
+                .order_by(AuditEvent.id)
+            )
+        ).all()
+    )
 
 
 async def test_get_defaults_when_missing(client, world):
@@ -160,7 +168,9 @@ async def test_settings_change_audited(client, world, db_session):
     await patch(client, world, auto_detect_enabled=True, allowed_origins=["https://a.example.com"])
     await patch(client, world, auto_detect_enabled=True)  # no-op: nothing to audit
     assert await audit_actions(db_session) == ["widget.settings.update"]
-    event = (await db_session.scalars(select(AuditEvent))).one()
+    event = (
+        await db_session.scalars(select(AuditEvent).where(AuditEvent.action.not_like("auth.%")))
+    ).one()
     assert event.detail == {"fields": ["allowed_origins", "auto_detect_enabled"]}
 
 

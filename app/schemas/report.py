@@ -14,7 +14,27 @@ class ReportCreated(BaseModel):
     created_at: datetime
 
 
+Progress = Literal["new", "reproducing", "reproduced", "triaged", "fixing", "dismissed", "closed"]
+
+
 class ReportItem(BaseModel):
+    """`progress` is the dashboard stage, computed from `workflow_status` and the latest job:
+
+    | workflow_status | latest job                                    | progress      |
+    |-----------------|-----------------------------------------------|---------------|
+    | closed          | (any)                                         | `closed`      |
+    | dismissed       | (any)                                         | `dismissed`   |
+    | fixing          | (any)                                         | `fixing`      |
+    | received        | none                                          | `new`         |
+    | received        | queued / running / cancelling                 | `reproducing` |
+    | received        | finished, verdict `reproduced`                | `reproduced`  |
+    | received        | finished, any other verdict or none           | `triaged`     |
+
+    Finished = completed / inconclusive / needs_info / failed / cancelled. Dashboard stages:
+    new → 신규 신고, reproducing → 재현 중, reproduced/triaged → 재현 완료, fixing → 버그 수정 중,
+    closed → 마감 (only after a passing retest). dismissed is a manual side exit.
+    """
+
     id: str
     program_id: str
     title: str
@@ -23,6 +43,8 @@ class ReportItem(BaseModel):
     origin_kind: str
     duplicate_count: int
     workflow_status: str
+    progress: Progress
+    closed_at: datetime | None
     latest_job: JobBrief | None
     created_at: datetime
 
@@ -42,6 +64,14 @@ class ReportDetail(ReportItem):
     client_context: dict | None = None
     # True once the retention purge blanked the text fields (they read as "").
     scrubbed: bool = False
+
+
+class WorkflowUpdate(BaseModel):
+    """`closed` is not accepted: only a passing retest closes a report."""
+
+    model_config = {"extra": "forbid"}
+
+    status: Literal["received", "fixing", "dismissed"]
 
 
 class ClarificationCreate(BaseModel):

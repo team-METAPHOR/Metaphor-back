@@ -11,6 +11,7 @@ from app.schemas.report import (
     ReportCreated,
     ReportDetail,
     ReportList,
+    WorkflowUpdate,
 )
 from app.services import clarifications, rerun
 from app.services import reports as service
@@ -64,6 +65,13 @@ async def list_reports(
 @router.get("/{report_id}", response_model=ReportDetail)
 async def get_report(report_id: str, user: CurrentUser, db: DbSession):
     return await service.get_report(db, user.id, report_id)
+
+
+@router.patch("/{report_id}/workflow", response_model=ReportDetail)
+async def set_workflow_status(
+    report_id: str, body: WorkflowUpdate, user: CurrentUser, db: DbSession
+):
+    return await service.set_workflow_status(db, user.id, report_id, body.status)
 
 
 @router.post("/{report_id}/clarifications", status_code=202, response_model=JobQueued)

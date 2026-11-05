@@ -392,3 +392,22 @@ async def test_legacy_http_account_flagged(client, db_session):
     response = await client.get(f"/api/v1/programs/{world['program'].id}", headers=world["admin"])
     assert response.json()["scope"]["credentials_blocked_by_http"] is True
     assert PASSWORD not in response.text and LOGIN_ID not in response.text
+
+
+async def test_in_use_false_on_http_origin(client, db_session):
+    """Legacy HTTP program with a saved account: the account exists but is never used."""
+    from sqlalchemy import update
+
+    from app.models import ProgramScopeRevision
+
+    world = await seeded(client, db_session, test_context_id="member")
+    body = {**BODY, "success_path": "/app"}
+    assert (await client.put(url(world), json=body, headers=world["admin"])).status_code == 200
+    await db_session.execute(
+        update(ProgramScopeRevision)
+        .where(ProgramScopeRevision.program_id == world["program"].id)
+        .values(base_url="http://staging.example.com/")
+    )
+    await db_session.commit()
+    got = (await client.get(url(world), headers=world["admin"])).json()
+    assert (got["configured"], got["in_use"]) == (True, False)

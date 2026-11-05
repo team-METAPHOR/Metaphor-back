@@ -90,6 +90,8 @@ def _in_use(row: ProgramTestAccount | None, revision) -> bool:
         row is not None
         and row.login_ready
         and login_applies(revision.test_context_id, revision.session_secret_ref)
+        # Engine 0.4.1 refuses credentials over HTTP, so a login there never actually runs.
+        and credentials.is_https(revision.base_url)
     )
 
 

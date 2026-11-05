@@ -144,7 +144,7 @@
 
 신고의 모든 실행(`initial` / `fresh` / `resume` / `retest`)을 최신순으로 `JobOut` 목록으로 돌려줍니다. `limit`(1~100, 기본 20)과 `cursor`로 페이지를 넘깁니다. 응답 형식은 `{"items": [...], "next_cursor": null}`입니다. 구성원이면 `viewer`도 볼 수 있고, 다른 회사의 신고면 404입니다. 소요 시간은 `finished_at - started_at`로 계산합니다.
 
-조건별 결과(2단계)는 엔진의 조건별 실행(Core_engine #9, Metaphor-back #55)이 들어온 다음에 추가합니다.
+조건 비교 작업(`has_conditions: true`)의 조건별 결과는 `GET /validation-jobs/{job_id}/conditions`로 봅니다. 형식과 권한은 [테스트 조건 비교 API](test-conditions.md#조건별-결과-get-validation-jobsjob_idconditions)를 참고하세요.
 
 ## 중복 신고 원문 (`GET /reports/{report_id}/duplicates`)
 
@@ -174,6 +174,7 @@
 | `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류), `TEST_ACCOUNT_INVALID`(저장된 계정을 열 수 없음, 다시 저장 필요), `TEST_ACCOUNT_KEY_MISSING`·`TEST_ACCOUNT_KEY_INVALID`(워커 개인키 없음·오류, 운영자 조치) |
 | `CHECK_TEST_ACCOUNT` | 등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요 | `LOGIN_FAILED`(엔진 자동 로그인 실패: 계정 오류, 폼 불일치, 성공 신호 미확인). 작업 `error_code` 또는 재현 시도 근거의 `blocker` |
 | `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
+| `USE_HTTPS_FOR_CREDENTIALS` | 테스트 계정이나 세션은 HTTPS 대상에서만 사용할 수 있습니다. 프로그램 원점을 유효한 인증서가 있는 HTTPS 주소로 다시 등록해 주세요 | `CREDENTIALS_REQUIRE_HTTPS`(엔진 0.4.1 또는 워커 실행 전 검사: HTTPS가 아닌 원점에 테스트 세션·계정을 쓰려 함) |
 | `ANSWER_QUESTIONS` | 추가 질문에 답하면 다시 검증합니다 | 최신 작업 상태가 `needs_info` |
 | `WAIT_FOR_PROVIDER` | AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요 | `MODEL_RATE_LIMITED`(공급자 429). 작업의 `retry_available_at` 이후 재요청 |
 | `RETRY_PROVIDER_LATER` | AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요 | `MODEL_TIMEOUT`, `MODEL_UNAVAILABLE`(연결 실패), `MODEL_HTTP_ERROR`(그 밖의 HTTP 오류) |

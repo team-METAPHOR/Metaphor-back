@@ -19,6 +19,7 @@
 
 - 프로그램 `base_url`이 HTTP이면 `PUT`은 422 `CREDENTIALS_REQUIRE_HTTPS`입니다.
 - 계정·운영자 세션·조건 세션이 있는 프로그램의 `base_url`을 HTTP로 바꾸면 422 `CREDENTIALS_REQUIRE_HTTPS`입니다. 먼저 계정을 삭제하거나 HTTPS 주소를 쓰세요.
+- HTTPS에서 다른 HTTPS 주소로 바꾸는 것처럼 `base_url`이 지금과 **조금이라도 다르면**(HTTP 여부와 상관없이) 저장된 테스트 계정은 자동으로 삭제되고(감사 로그 `program.test_account_delete`, `reason: base_url_changed`), 테스트 조건에 연결된 세션도 해제됩니다. 계정 비밀번호를 새 사이트로 보내지 않기 위해서입니다. 새 주소에서 쓰려면 계정을 다시 저장하세요.
 - 세션이 연결된 테스트 조건은 프로그램 원점이 HTTP이면 수정할 때 422 `CREDENTIALS_REQUIRE_HTTPS`입니다.
 - 0.4.1 이전에 저장된 HTTP+인증 설정은 프로그램 응답의 `scope.credentials_blocked_by_http: true`로 표시합니다(비밀 값은 포함하지 않음). 이 상태의 실행은 워커가 엔진 호출 전에 `CREDENTIALS_REQUIRE_HTTPS`로 실패시키고, `required_actions`에 `USE_HTTPS_FOR_CREDENTIALS`(HTTPS 재등록 안내)가 붙습니다. HTTP로 자동 재시도하지 않습니다.
 
@@ -30,7 +31,7 @@
 ```
 
 - `login_id` 1~254자, `password` 1~256자. 정의되지 않은 필드는 거부합니다.
-- `login_path`(선택): `/`로 시작하는 경로. 쿼리(`?`)·프래그먼트(`#`)·`//`·백슬래시·공백은 허용하지 않습니다.
+- `login_path`(선택): `/`로 시작하는 경로. 쿼리(`?`)·프래그먼트(`#`)·백슬래시·공백은 허용하지 않고, `//`로 **시작하는** 경로(다른 호스트로 해석될 수 있음)도 거부합니다. 경로 중간의 `//`(예: `/a//b`)는 형식 검사에서 막지 않습니다.
   현재 승인 범위의 `allowed_path_prefixes` 안에 있고 `excluded_path_prefixes`에 걸리지 않아야 합니다.
   범위를 벗어나면 422 `LOGIN_PATH_OUT_OF_SCOPE`(`detail.reason`: `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED` 등)입니다.
 - `submit_path`(선택): 로그인 폼이 POST하는 경로. 생략하면 `login_path`로 제출합니다. 형식·범위 규칙은 `login_path`와 같습니다.
@@ -51,13 +52,14 @@
  "success_selector": null, "updated_at": "2026-11-05T07:31:50Z"}
 ```
 
-비밀번호와 전체 로그인 아이디는 어떤 응답에도 포함하지 않습니다. 저장된 계정이 없으면 `configured: false`이고 나머지는 `null`입니다.
+비밀번호와 전체 로그인 아이디는 어떤 응답에도 포함하지 않습니다. 저장된 계정이 없으면 `configured: false`, `in_use: false`이고 나머지는 `null`입니다.
 
 - `configured`: 계정이 저장되어 있음.
 - `in_use`: 현재 프로그램 설정으로 검증 실행이 이 계정으로 로그인함. 다음을 모두 만족하면 `true`입니다.
   - `login_path`와 성공 신호(`success_path` 또는 `success_selector`)가 저장되어 있음
   - 현재 승인 범위의 `test_context_id`가 `anonymous`가 아님(엔진은 계정·역할·데이터 조건을 식별하는 명시적 컨텍스트를 요구합니다)
   - 운영자가 연결한 세션(`has_session`의 운영자 세션)이 없음. 엔진은 고정 세션 헤더와 폼 로그인을 함께 쓰지 않으므로 운영자 세션이 우선합니다
+  - 프로그램 `base_url`이 HTTPS임. 엔진 0.4.1은 HTTP 대상에 계정을 쓰지 않으므로 HTTP 원점이면 항상 `false`입니다
   `false`이면 화면에서 "저장됨(실행에 적용 안 됨)"으로 보여 주고, 위 조건 중 빠진 것을 안내해 주세요. 조건 매트릭스 작업은 조건마다 같은 규칙(조건의 `test_context_id`)을 따릅니다.
 
 프로그램 응답의 `scope.has_test_account`는 계정 저장 여부, `scope.credentials_blocked_by_http`는 HTTP 원점에 저장된 계정·운영자 세션이 있어 실행이 막힌 상태이고, `scope.has_session`은 운영자가 연결한 세션이 있거나 테스트 계정이 저장되어 있으면 `true`입니다.
@@ -79,7 +81,7 @@
 
 ## 보관 방식
 
-계정은 승인 범위 리비전이 아니라 프로그램 단위로 저장합니다. 비밀번호를 바꿔도 새 리비전이 생기지 않고, 워커는 실행 시점의 현재 계정을 읽습니다.
+계정은 승인 범위 리비전이 아니라 프로그램 단위로 저장합니다. 비밀번호를 바꿔도 새 리비전이 생기지 않고, 워커는 실행 시점의 현재 계정을 읽습니다. 단, 범위를 바꾸면서 `base_url`이 달라지면 계정은 삭제됩니다(위 HTTPS 필수 절 참고).
 
 - API는 공개키로 암호화만 할 수 있고, 복호화용 개인키는 워커 환경(`TEST_ACCOUNT_PRIVATE_KEY`)에만 있습니다.
 - 방식: 요청마다 새 AES-256-GCM 데이터 키로 `{login_id, password}` JSON을 암호화하고, 데이터 키는 RSA-OAEP(SHA-256, RSA 3072비트 이상)로 감쌉니다.

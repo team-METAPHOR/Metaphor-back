@@ -28,6 +28,7 @@ from app.services.intake import (
 )
 from app.services.limits import enforce_rate_limit, since
 from app.services.origin_verification import origin_of
+from app.services.report_duplicates import record_duplicate
 from app.services.reports import TEXT_LIMITS, create_report
 from app.services.widget_settings import normalize_origin, origin_kind
 
@@ -314,15 +315,26 @@ async def submit_report(
                     429, "WIDGET_DAILY_LIMITED", "오늘은 더 이상 신고를 받을 수 없습니다."
                 )
             over_cap = today >= cap
-            fp = None
+            fp = original = None
             if body.error_type != "manual":
                 fp = fingerprint(program.id, body, context, page_path)
                 original = await repo.find_recent_fingerprint(
                     db, program.id, fp, since(**DEDUP_WINDOW)
                 )
-                if original is not None:
-                    await repo.bump_duplicate(db, original.id)
-                    return 200, {"status": "duplicate", "receipt_id": None}
+            description = engine_description(
+                _clean(body.description, MAX_DESCRIPTION), body, context
+            )
+            if original is not None:
+                await record_duplicate(
+                    db,
+                    original,
+                    program,
+                    description=description,
+                    client_context=context,
+                    screenshot=screenshot,
+                )
+                # Same answer whether or not the duplicate was stored (cap, scrub).
+                return 200, {"status": "duplicate", "receipt_id": None}
             report, _ = await create_report(
                 db,
                 ReportSubmission(
@@ -331,9 +343,7 @@ async def submit_report(
                     source="widget",
                     author_id=None,
                     title=body.title,
-                    description=engine_description(
-                        _clean(body.description, MAX_DESCRIPTION), body, context
-                    ),
+                    description=description,
                     screenshot=screenshot,
                     error_type=body.error_type,
                     origin_kind=kind,

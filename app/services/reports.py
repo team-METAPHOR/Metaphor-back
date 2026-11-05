@@ -6,8 +6,10 @@ import math
 import secrets
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import get_args
 
+from core_engine import Screenshot
 from sqlalchemy import ColumnElement, and_, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,7 @@ from app.models import Artifact, Program, ProgramScopeRevision, Report, User, Va
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import orgs as orgs_repo
 from app.repositories import programs as programs_repo
+from app.repositories import report_duplicates as duplicates_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import (
     Assignee,
@@ -56,10 +59,32 @@ from app.services.report_actions import (
 # Platform reports per user per hour (widget reports have their own limits).
 REPORT_HOURLY_LIMIT = 20
 TEXT_LIMITS = {"title": 200, "description": 8000, "expected_result": 2000, "test_data": 2000}
+# Characters of the newest duplicate's description shown on list items and detail.
+EXCERPT_LENGTH = 120
 
 
 # create_job refusal that parks a new report instead of rejecting it.
 QUOTA_CODES = ("DAILY_LIMIT_EXCEEDED",)
+
+
+def add_input_image(
+    session: AsyncSession, report: Report, shot: Screenshot, path: Path, *, expires_at: datetime
+) -> Artifact:
+    """Write an already-masked screenshot (0600) and add its `input_image` artifact row. The
+    caller removes `path` again if its transaction fails."""
+    storage.write_private(path, shot.data)
+    artifact = Artifact(
+        id=new_id(),
+        org_id=report.org_id,
+        report_id=report.id,
+        kind="input_image",
+        storage_key=storage.relative_key(path),
+        sha256=shot.sha256,
+        size=len(shot.data),
+        expires_at=expires_at,
+    )
+    session.add(artifact)
+    return artifact
 
 
 async def create_report(
@@ -114,18 +139,13 @@ async def create_report(
             written = storage.safe_path(
                 program.owner_org_id, report.id, "input", f"{shot.sha256}.png"
             )
-            storage.write_private(written, shot.data)
-            artifact = Artifact(
-                id=new_id(),
-                org_id=program.owner_org_id,
-                report_id=report.id,
-                kind="input_image",
-                storage_key=storage.relative_key(written),
-                sha256=shot.sha256,
-                size=len(shot.data),
+            artifact = add_input_image(
+                session,
+                report,
+                shot,
+                written,
                 expires_at=datetime.now(UTC) + timedelta(days=program.retention_days),
             )
-            session.add(artifact)
             report.input_artifact_id = artifact.id
             await session.flush()
         job = None
@@ -334,6 +354,7 @@ def _item(
     assignee_active: bool | None = None,
     *,
     fix_verified: bool,
+    duplicate_excerpt: str | None = None,
 ) -> dict:
     return {
         "id": report.id,
@@ -351,6 +372,7 @@ def _item(
         "assignee": _assignee(assignee, assignee_active),
         "latest_job": _brief(job),
         "created_at": report.created_at,
+        "latest_duplicate_excerpt": duplicate_excerpt,
     }
 
 
@@ -411,13 +433,24 @@ async def list_reports(
             ascending=sort == "created_asc",
         )
         total = await reports_repo.count_visible(db, user_id, where) if page_no else None
-        verified = await reports_repo.fix_verified_ids(db, [row[0].id for row in rows[:limit]])
+        page_ids = [row[0].id for row in rows[:limit]]
+        verified = await reports_repo.fix_verified_ids(db, page_ids)
+        excerpts = await duplicates_repo.latest_excerpts(db, page_ids, EXCERPT_LENGTH)
     page_rows = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
         last = page_rows[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(*row, fix_verified=row[0].id in verified)) for row in page_rows]
+    items = [
+        ReportItem(
+            **_item(
+                *row,
+                fix_verified=row[0].id in verified,
+                duplicate_excerpt=excerpts.get(row[0].id),
+            )
+        )
+        for row in page_rows
+    ]
     return ReportList(items=items, next_cursor=next_cursor, total=total, page=page_no)
 
 
@@ -551,8 +584,15 @@ async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     open_ = report.workflow_status not in ("closed", "dismissed")
     origin_ok = await origin_verified(db, report.program_id) if open_ else True
     verified = report.id in await reports_repo.fix_verified_ids(db, [report.id])
+    excerpts = await duplicates_repo.latest_excerpts(db, [report.id], EXCERPT_LENGTH)
     return ReportDetail(
-        **_item(report, job, *(assignee or ()), fix_verified=verified),
+        **_item(
+            report,
+            job,
+            *(assignee or ()),
+            fix_verified=verified,
+            duplicate_excerpt=excerpts.get(report.id),
+        ),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,

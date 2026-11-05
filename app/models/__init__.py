@@ -12,7 +12,7 @@ from app.models.identity import (
     User,
 )
 from app.models.program import OriginVerification, Program, ProgramScopeRevision
-from app.models.report import Clarification, Report
+from app.models.report import Clarification, Report, ReportDuplicate
 from app.models.validation_job import JobEvent, ModelUsage, QaResult, ValidationJob
 from app.models.widget import ProgramWidgetSettings
 
@@ -34,6 +34,7 @@ __all__ = [
     "ProgramWidgetSettings",
     "QaResult",
     "Report",
+    "ReportDuplicate",
     "Session",
     "User",
     "ValidationJob",

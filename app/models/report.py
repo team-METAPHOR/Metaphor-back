@@ -99,3 +99,20 @@ class Clarification(Base):
         String(ID_LENGTH), ForeignKey("validation_jobs.id"), unique=True
     )
     created_at: Mapped[datetime] = created_at()
+
+
+class ReportDuplicate(Base):
+    """One widget submission merged into an earlier report with the same fingerprint. Text and
+    context are stored redacted, like the original's; the screenshot is masked."""
+
+    __tablename__ = "report_duplicates"
+    __table_args__ = (Index("ix_report_duplicates_report_received", "report_id", "received_at"),)
+
+    id: Mapped[str] = id_pk()
+    report_id: Mapped[str] = fk("reports.id", ondelete="CASCADE", index=False)
+    org_id: Mapped[str] = fk("organizations.id")
+    description: Mapped[str] = mapped_column(Text, server_default="")
+    client_context: Mapped[dict | None] = mapped_column(JSONB)
+    # Plain id (no FK), like reports.input_artifact_id.
+    input_artifact_id: Mapped[str | None] = mapped_column(String(ID_LENGTH))
+    received_at: Mapped[datetime] = created_at()

@@ -13,11 +13,12 @@ from app.schemas.report import (
     Progress,
     ReportCreated,
     ReportDetail,
+    ReportDuplicateList,
     ReportList,
     WorkflowUpdate,
 )
 from app.schemas.validation_job import JobList
-from app.services import clarifications, rerun, validation_jobs
+from app.services import clarifications, report_duplicates, rerun, validation_jobs
 from app.services import reports as service
 from app.services.intake import read_upload_capped
 
@@ -94,6 +95,20 @@ async def list_reports(
 @router.get("/{report_id}", response_model=ReportDetail)
 async def get_report(report_id: str, user: CurrentUser, db: DbSession):
     return await service.get_report(db, user.id, report_id)
+
+
+@router.get("/{report_id}/duplicates", response_model=ReportDuplicateList)
+async def list_duplicates(
+    report_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: str | None = None,
+):
+    """Widget submissions merged into this report, newest first (cursor-paged)."""
+    return await report_duplicates.list_duplicates(
+        db, user.id, report_id, limit=limit, cursor=cursor
+    )
 
 
 @router.patch("/{report_id}/workflow", response_model=ReportDetail)

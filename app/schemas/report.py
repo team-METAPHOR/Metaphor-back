@@ -80,6 +80,8 @@ class ReportItem(BaseModel):
     assignee: Assignee | None
     latest_job: JobBrief | None
     created_at: datetime
+    # Start of the newest stored duplicate's redacted description (widget only), else null.
+    latest_duplicate_excerpt: str | None = None
 
 
 class RequiredAction(BaseModel):
@@ -106,6 +108,28 @@ class ReportList(BaseModel):
     next_cursor: str | None
     total: int | None = None
     page: int | None = None
+
+
+class ReportDuplicateItem(BaseModel):
+    """A widget submission merged into this report (same error fingerprint within 24 h).
+    `description` is redacted plain text; `client_context` is the same whitelisted SDK
+    metadata the report itself keeps. The screenshot (masked) downloads through
+    `GET /evidence/{input_artifact_id}/download`."""
+
+    id: str
+    received_at: datetime
+    description: str
+    has_screenshot: bool
+    input_artifact_id: str | None
+    client_context: dict | None
+
+
+class ReportDuplicateList(BaseModel):
+    """Newest first. Only the first stored duplicates are kept (see `duplicate_count` for
+    the total); the list is empty once the report's retention scrub ran."""
+
+    items: list[ReportDuplicateItem]
+    next_cursor: str | None
 
 
 class AttentionItem(BaseModel):

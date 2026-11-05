@@ -8,7 +8,8 @@
 5. Personal data in rows: `client_ip_hash` after a day (it only feeds the 1-hour widget IP
    limit), and, past the program's `retention_days`, the report's free text and client metadata
    plus its jobs' raw results, event details, questions and answers. Report and job rows stay
-   for statistics; `reports.scrubbed_at` marks them. Reports with an active job wait.
+   for statistics; `reports.scrubbed_at` marks them. Stored duplicates and their screenshots
+   are deleted. Reports with an active job wait.
 
 Safe to run repeatedly and concurrently with the API/worker: nothing younger than ORPHAN_AGE
 is touched unless its artifact row says it expired.
@@ -46,14 +47,18 @@ def _inside_root(root: Path, storage_key: str) -> Path | None:
     return path
 
 
+def _unlink(root: Path, artifact_id: str, storage_key: str) -> None:
+    path = _inside_root(root, storage_key)
+    if path is None:
+        logger.warning("artifact %s has an unsafe storage key; row removed only", artifact_id)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def _purge_expired(conn: psycopg.Connection, root: Path) -> int:
     rows = conn.execute("SELECT id, storage_key FROM artifacts WHERE expires_at < now()").fetchall()
     for artifact_id, storage_key in rows:
-        path = _inside_root(root, storage_key)
-        if path is None:
-            logger.warning("artifact %s has an unsafe storage key; row removed only", artifact_id)
-        else:
-            path.unlink(missing_ok=True)
+        _unlink(root, artifact_id, storage_key)
         conn.execute("DELETE FROM artifacts WHERE id = %s", (artifact_id,))
     return len(rows)
 
@@ -100,8 +105,10 @@ def _clear_ip_hashes(conn: psycopg.Connection) -> int:
     ).rowcount
 
 
-def _scrub_reports(conn: psycopg.Connection) -> int:
-    """One batch per run; the cron catches up on a backlog over the following runs."""
+def _scrub_reports(conn: psycopg.Connection, root: Path) -> int:
+    """One batch per run; the cron catches up on a backlog over the following runs. Stored
+    duplicates (text, context, masked screenshot) are deleted outright; `duplicate_count`
+    stays on the report."""
     with conn.transaction():
         ids = [
             report_id
@@ -149,6 +156,15 @@ def _scrub_reports(conn: psycopg.Connection) -> int:
         conn.execute(
             "UPDATE clarifications SET answers = '' WHERE report_id = ANY(%(ids)s)", params
         )
+        duplicate_files = conn.execute(
+            """
+            DELETE FROM artifacts WHERE id IN (
+                SELECT input_artifact_id FROM report_duplicates WHERE report_id = ANY(%(ids)s)
+            ) RETURNING id, storage_key
+            """,
+            params,
+        ).fetchall()
+        conn.execute("DELETE FROM report_duplicates WHERE report_id = ANY(%(ids)s)", params)
         conn.execute(
             """
             UPDATE reports SET title = '', description = '', expected_result = '',
@@ -158,6 +174,9 @@ def _scrub_reports(conn: psycopg.Connection) -> int:
             """,
             params,
         )
+    # After commit: a crash here only leaves files without a row, which the orphan pass removes.
+    for artifact_id, storage_key in duplicate_files:
+        _unlink(root, artifact_id, storage_key)
     return len(ids)
 
 
@@ -168,7 +187,7 @@ def purge(conn: psycopg.Connection) -> dict[str, int]:
     orphans, dirs = _purge_orphans(conn, root, cutoff)
     records = conn.execute("DELETE FROM idempotency_records WHERE expires_at < now()").rowcount
     ip_hashes = _clear_ip_hashes(conn)
-    scrubbed = _scrub_reports(conn)
+    scrubbed = _scrub_reports(conn, root)
     return {
         "artifacts": artifacts,
         "orphans": orphans,

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -222,3 +223,46 @@ async def test_rerun_per_user_hourly_limit_429(client, db_session, world):
     response = await request(client, world, {"mode": "fresh"})
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "JOB_RATE_LIMITED"
+
+
+async def rate_limited(db_session, world, retry_after, finished_ago=0):
+    job = await db_session.get(ValidationJob, world["job_id"], populate_existing=True)
+    job.status, job.verdict, job.error_code = "inconclusive", "inconclusive", "MODEL_RATE_LIMITED"
+    job.finished_at = datetime.now(UTC) - timedelta(seconds=finished_ago)
+    calls = [
+        {"phase": "intake", "status": "MODEL_RATE_LIMITED", "retry_after_seconds": retry_after}
+    ]
+    db_session.add(QaResult(job_id=job.id, raw={"report": {"model_calls": calls}}))
+    await db_session.commit()
+    return job
+
+
+async def test_rate_limited_job_shows_retry_and_blocks_early_rerun(client, db_session, world):
+    job = await rate_limited(db_session, world, 120)
+    body = (await client.get(f"/api/v1/validation-jobs/{job.id}", headers=world["dev_h"])).json()
+    assert body["retry_after_seconds"] == 120
+    available = datetime.fromisoformat(body["retry_available_at"])
+    assert available == job.finished_at + timedelta(seconds=120)
+    listed = await client.get(
+        f"/api/v1/reports/{world['report_id']}/validation-jobs", headers=world["dev_h"]
+    )
+    assert listed.json()["items"][0]["retry_available_at"] == body["retry_available_at"]
+    report = await client.get(f"/api/v1/reports/{world['report_id']}", headers=world["dev_h"])
+    assert "WAIT_FOR_PROVIDER" in [a["code"] for a in report.json()["required_actions"]]
+
+    response = await request(client, world, {"mode": "fresh"})
+    assert (response.status_code, response.json()["error"]["code"]) == (
+        429,
+        "PROVIDER_RATE_LIMITED",
+    )
+    assert 0 < int(response.headers["Retry-After"]) <= 120
+
+
+async def test_rerun_allowed_after_provider_wait(client, db_session, world):
+    await rate_limited(db_session, world, 60, finished_ago=61)
+    assert (await request(client, world, {"mode": "fresh"})).status_code == 202
+
+
+async def test_retry_hint_over_a_day_is_ignored(client, db_session, world):
+    await rate_limited(db_session, world, 86401)
+    assert (await request(client, world, {"mode": "fresh"})).status_code == 202

@@ -24,6 +24,9 @@ class JobOut(BaseModel):
     parent_job_id: str | None
     baseline_job_id: str | None
     has_conditions: bool  # condition matrix job: per-condition rows at /conditions
+    # MODEL_RATE_LIMITED only: the provider's Retry-After and the time a rerun is accepted.
+    retry_after_seconds: float | None = None
+    retry_available_at: datetime | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

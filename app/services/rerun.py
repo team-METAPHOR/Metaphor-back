@@ -25,6 +25,7 @@ from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.jobs import create_job, enforce_job_request_limit, scope_snapshot
+from app.services.provider_limits import enforce_provider_wait
 from app.services.reports import load_visible_report
 
 COMPARABLE_VERDICTS = ("reproduced", "not_reproduced")
@@ -99,6 +100,7 @@ async def request_job(
             raise ApiError(403, "FORBIDDEN", "재실행 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
+            await enforce_provider_wait(db, report)
             await enforce_job_request_limit(db, user_id)
             program = await db.get(Program, report.program_id)
             if program.status != "active" or not program.external_ai_allowed:

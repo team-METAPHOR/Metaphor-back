@@ -174,8 +174,18 @@
 | `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류) |
 | `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
 | `ANSWER_QUESTIONS` | 추가 질문에 답하면 다시 검증합니다 | 최신 작업 상태가 `needs_info` |
+| `WAIT_FOR_PROVIDER` | AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요 | `MODEL_RATE_LIMITED`(공급자 429). 작업의 `retry_available_at` 이후 재요청 |
+| `RETRY_PROVIDER_LATER` | AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요 | `MODEL_TIMEOUT`, `MODEL_UNAVAILABLE`(연결 실패), `MODEL_HTTP_ERROR`(그 밖의 HTTP 오류) |
+| `OPERATOR_CHECK_PROVIDER` | AI 공급자 설정 문제로 중단됐습니다. 운영자 조치가 필요합니다 | `MODEL_AUTH_FAILED`(401/403, 키·권한), `MODEL_RESPONSE_TOO_LARGE`. 다시 실행해도 같은 이유로 실패합니다 |
 
 엔진에는 로그인 화면을 따로 알려주는 코드가 없습니다. 로그인이 필요한 페이지가 4xx로 답하면 `NAVIGATION_FAILED` → `CHECK_TARGET_URL`로 보입니다.
+
+### AI 공급자 사용량 제한
+
+- 공급자가 429와 숫자 `Retry-After`를 주면 엔진이 `report.model_calls[].retry_after_seconds`로 기록합니다(엔진은 스스로 재시도하지 않음). 작업 응답(`GET /validation-jobs/{id}`, 작업 목록)에 `retry_after_seconds`와 `retry_available_at`(= `finished_at` + 대기 초, UTC)이 나옵니다. `MODEL_RATE_LIMITED`가 아니거나 힌트가 없으면 둘 다 `null`입니다.
+- 24시간(86400초)을 넘거나 음수인 힌트는 무시합니다.
+- 최신 작업이 이 대기 시간 안이면 `POST /reports/{id}/validation-jobs`(`fresh`/`retest`)는 `429 PROVIDER_RATE_LIMITED`와 `Retry-After`(남은 초, 올림) 헤더, `error.detail.retry_available_at`을 돌려줍니다. 이때는 사용자별 요청 한도를 쓰지 않습니다. 시간이 지나면 정상 접수됩니다.
+- 공급자 오류로 끝난 작업은 자동 재생성(`auto_fresh`)을 하지 않습니다. 공급자 오류 본문과 키는 저장·응답하지 않습니다.
 
 `best_attempt` — 끝난 최신 작업의 저장된 엔진 결과(`qa_results`)가 있을 때만 객체이고, 없으면(작업 없음·진행 중·보존 기간 삭제) `null`입니다.
 

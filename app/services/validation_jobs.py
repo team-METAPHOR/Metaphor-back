@@ -11,6 +11,7 @@ from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobList, JobOut, JobResult
 from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
+from app.services.provider_limits import job_retry
 from app.services.reports import load_visible_report
 
 
@@ -25,7 +26,13 @@ async def load_visible_job(db: AsyncSession, user_id: str, job_id: str):
 async def get_job(db: AsyncSession, user_id: str, job_id: str) -> JobOut:
     async with db.begin():
         job, _ = await load_visible_job(db, user_id, job_id)
-        return JobOut.model_validate(job, from_attributes=True)
+        return await job_out(db, job)
+
+
+async def job_out(db: AsyncSession, job) -> JobOut:
+    out = JobOut.model_validate(job, from_attributes=True)
+    out.retry_after_seconds, out.retry_available_at = await job_retry(db, job)
+    return out
 
 
 async def list_report_jobs(
@@ -36,10 +43,11 @@ async def list_report_jobs(
     async with db.begin():
         await load_visible_report(db, user_id, report_id)
         rows = await jobs_repo.list_for_report(db, report_id, limit, position)
-    page = rows[:limit]
+        page = rows[:limit]
+        items = [await job_out(db, job) for job in page]
     next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
     return JobList(
-        items=[JobOut.model_validate(job, from_attributes=True) for job in page],
+        items=items,
         next_cursor=next_cursor,
     )
 

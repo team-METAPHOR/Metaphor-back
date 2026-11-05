@@ -22,6 +22,9 @@ ACTION_MESSAGES = {
     "TEST_ACCOUNT_REQUIRED": "테스트 계정을 등록하면 다시 시도합니다",
     "CHECK_TARGET_URL": "테스트 대상 URL과 허용 범위를 확인해 주세요",
     "ANSWER_QUESTIONS": "추가 질문에 답하면 다시 검증합니다",
+    "WAIT_FOR_PROVIDER": "AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요",
+    "RETRY_PROVIDER_LATER": "AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요",
+    "OPERATOR_CHECK_PROVIDER": "AI 공급자 설정 문제로 중단됐습니다. 운영자 조치가 필요합니다",
 }
 
 CODE_ACTIONS = {
@@ -38,6 +41,15 @@ CODE_ACTIONS = {
     "DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "PRIVATE_DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "NAVIGATION_FAILED": "CHECK_TARGET_URL",
+    # Engine model providers (openai/groq): 429 → wait for Retry-After (job.retry_available_at);
+    # timeout/unreachable/other HTTP status → transient; 401/403 key or oversized response →
+    # the operator, since rerunning would fail the same way. Provider bodies are never stored.
+    "MODEL_RATE_LIMITED": "WAIT_FOR_PROVIDER",
+    "MODEL_TIMEOUT": "RETRY_PROVIDER_LATER",
+    "MODEL_UNAVAILABLE": "RETRY_PROVIDER_LATER",
+    "MODEL_HTTP_ERROR": "RETRY_PROVIDER_LATER",
+    "MODEL_AUTH_FAILED": "OPERATOR_CHECK_PROVIDER",
+    "MODEL_RESPONSE_TOO_LARGE": "OPERATOR_CHECK_PROVIDER",
 }
 
 # Display order when several apply.

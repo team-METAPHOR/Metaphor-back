@@ -84,6 +84,10 @@ async def test_viewer_reads_required_actions_and_best_attempt(client, db_session
         ("backend_error_code", "SESSION_SECRET_INVALID", "TEST_ACCOUNT_REQUIRED"),
         ("error_code", "PATH_OUT_OF_SCOPE", "CHECK_TARGET_URL"),
         ("error_code", "DNS_FAILED", "CHECK_TARGET_URL"),
+        ("error_code", "MODEL_RATE_LIMITED", "WAIT_FOR_PROVIDER"),
+        ("error_code", "MODEL_TIMEOUT", "RETRY_PROVIDER_LATER"),
+        ("error_code", "MODEL_AUTH_FAILED", "OPERATOR_CHECK_PROVIDER"),
+        ("error_code", "MODEL_RESPONSE_TOO_LARGE", "OPERATOR_CHECK_PROVIDER"),
     ],
 )
 async def test_job_error_codes_map_to_actions(client, db_session, world, column, code, expected):
@@ -107,7 +111,7 @@ async def test_unknown_codes_give_no_action(client, db_session, world):
     report = await with_result(
         db_session,
         world,
-        job={"status": "failed", "error_code": "MODEL_TIMEOUT"},
+        job={"status": "failed", "error_code": "MODEL_INVALID_OUTPUT"},
         raw_report=blocked_run("STEP_OR_READINESS_FAILED"),
     )
     assert (await detail(client, world, report))["required_actions"] == []
@@ -187,7 +191,7 @@ async def test_summary_needs_attention_includes_actionable_reports(client, db_se
         job={"status": "inconclusive", "verdict": "inconclusive"},
         raw_report=blocked_run("PATH_EXCLUDED"),
     )
-    await with_result(db_session, world, job={"status": "failed", "error_code": "MODEL_TIMEOUT"})
+    await with_result(db_session, world, job={"status": "failed", "error_code": "MODEL_INVALID_OUTPUT"})
     response = await client.get(
         f"/api/v1/orgs/{world['org'].id}/report-summary", headers=world["dev_h"]
     )

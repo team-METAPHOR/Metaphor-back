@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -36,11 +37,15 @@ class Report(Base):
         Index("ix_reports_program_fingerprint", "program_id", "fingerprint", "created_at"),
         Index("ix_reports_program_ip", "program_id", "client_ip_hash", "created_at"),
         Index("ix_reports_org_created", "org_id", "created_at"),
+        UniqueConstraint("org_id", "number", name="uq_reports_org_number"),
     )
 
     id: Mapped[str] = id_pk()
     program_id: Mapped[str] = fk("programs.id", index=False)
     org_id: Mapped[str] = fk("organizations.id", index=False)
+    # Human number per org (BUG-<number>), from organizations.report_seq. Gap-free except
+    # where a report creation rolled back after taking its number.
+    number: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(20), server_default="platform")
     # NULL for anonymous widget reports.
     author_id: Mapped[str | None] = fk("users.id", nullable=True)

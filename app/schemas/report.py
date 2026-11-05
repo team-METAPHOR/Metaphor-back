@@ -47,6 +47,8 @@ class ReportItem(BaseModel):
 
     id: str
     program_id: str
+    # Per-org human number; the frontend shows it as BUG-<number>.
+    number: int
     title: str
     source: str
     error_type: str

@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Membership, Organization, User
@@ -44,3 +44,15 @@ async def list_members(
     if not include_inactive:
         query = query.where(Membership.is_active)
     return [tuple(row) for row in await db.execute(query)]
+
+
+async def next_report_number(db: AsyncSession, org_id: str) -> int:
+    """Atomically take the org's next report number. The row lock serializes concurrent
+    creates in one org until commit; a rollback leaves a gap (accepted)."""
+    query = (
+        update(Organization)
+        .where(Organization.id == org_id)
+        .values(report_seq=Organization.report_seq + 1)
+        .returning(Organization.report_seq)
+    )
+    return (await db.execute(query)).scalar_one()

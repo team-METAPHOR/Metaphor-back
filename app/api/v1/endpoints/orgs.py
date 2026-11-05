@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Header, Path, Response
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import CurrentUser, DbSession
@@ -17,7 +17,8 @@ from app.schemas.org import (
     OrgPatch,
     OrgResponse,
 )
-from app.services import invites
+from app.schemas.report import ReportDetail
+from app.services import invites, reports
 from app.services import orgs as service
 
 router = APIRouter(tags=["orgs"])
@@ -81,3 +82,11 @@ async def revoke_invite(org_id: str, invite_id: str, user: CurrentUser, db: DbSe
 @router.post("/invites/accept", response_model=InviteAccepted)
 async def accept_invite(body: InviteAccept, user: CurrentUser, db: DbSession):
     return await invites.accept_invite(db, user.id, body.token)
+
+
+@router.get("/orgs/{org_id}/reports/{number}", response_model=ReportDetail)
+async def get_report_by_number(
+    org_id: str, number: Annotated[int, Path(ge=1)], user: CurrentUser, db: DbSession
+):
+    """Report detail by the org's human number (BUG-<number>); members only, 404 otherwise."""
+    return await reports.get_report_by_number(db, user.id, org_id, number)

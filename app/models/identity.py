@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, text
+from sqlalchemy import Boolean, DateTime, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -15,6 +15,8 @@ class Organization(Base):
     id: Mapped[str] = id_pk()
     name: Mapped[str] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    # Last per-org report number handed out (reports.number); bumped atomically on create.
+    report_seq: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     created_at: Mapped[datetime] = created_at()
 
 

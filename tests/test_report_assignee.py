@@ -46,6 +46,7 @@ async def test_assign_and_unassign(client, db_session, world):
         "id": dev.id,
         "display_name": "개발자",
         "email": dev.email,
+        "active": True,
     }
     detail = await client.get(f"/api/v1/reports/{world['report_id']}", headers=world["dev_h"])
     assert detail.json()["assignee"]["id"] == dev.id
@@ -96,14 +97,21 @@ async def test_roles_and_cross_org(client, db_session, world):
     assert (response.status_code, response.json()["error"]["code"]) == (404, "NOT_FOUND")
 
 
-async def test_deactivated_assignee_kept(client, db_session, world):
-    await assign(client, world, world["dev"].id)
+async def test_deactivated_assignee_kept_but_redacted(client, db_session, world):
+    """The assignment survives deactivation, but a former member's email/name is not shown."""
+    dev = world["dev"]
+    await assign(client, world, dev.id)
     await db_session.execute(
-        update(Membership).where(Membership.user_id == world["dev"].id).values(is_active=False)
+        update(Membership).where(Membership.user_id == dev.id).values(is_active=False)
     )
     await db_session.commit()
+    gone = {"id": dev.id, "display_name": None, "email": None, "active": False}
     detail = await client.get(f"/api/v1/reports/{world['report_id']}", headers=world["admin_h"])
-    assert detail.json()["assignee"]["id"] == world["dev"].id
+    assert detail.json()["assignee"] == gone
+    (item,) = (await client.get("/api/v1/reports", headers=world["admin_h"])).json()["items"]
+    assert item["assignee"] == gone
+    filtered = await client.get(f"/api/v1/reports?assignee={dev.id}", headers=world["admin_h"])
+    assert [i["assignee"] for i in filtered.json()["items"]] == [gone]
 
 
 async def test_assignee_filter_me_and_user_id_with_cursor(client, db_session, world):

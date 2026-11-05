@@ -222,13 +222,20 @@ def report_progress(workflow_status: str, job: JobBrief | ValidationJob | None) 
     return "reproduced" if job.verdict == "reproduced" else "triaged"
 
 
-def _assignee(user: User | None) -> Assignee | None:
+def _assignee(user: User | None, active: bool | None) -> Assignee | None:
     if user is None:
         return None
-    return Assignee(id=user.id, display_name=user.display_name, email=user.email)
+    if not active:
+        return Assignee(id=user.id, display_name=None, email=None, active=False)
+    return Assignee(id=user.id, display_name=user.display_name, email=user.email, active=True)
 
 
-def _item(report: Report, job: ValidationJob | None, assignee: User | None) -> dict:
+def _item(
+    report: Report,
+    job: ValidationJob | None,
+    assignee: User | None = None,
+    assignee_active: bool | None = None,
+) -> dict:
     return {
         "id": report.id,
         "program_id": report.program_id,
@@ -240,7 +247,7 @@ def _item(report: Report, job: ValidationJob | None, assignee: User | None) -> d
         "workflow_status": report.workflow_status,
         "progress": report_progress(report.workflow_status, job),
         "closed_at": report.closed_at,
-        "assignee": _assignee(assignee),
+        "assignee": _assignee(assignee, assignee_active),
         "latest_job": _brief(job),
         "created_at": report.created_at,
     }
@@ -273,7 +280,7 @@ async def list_reports(
     if len(rows) > limit:
         last = page[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(r, j, u)) for r, j, u in page]
+    items = [ReportItem(**_item(*row)) for row in page]
     return ReportList(items=items, next_cursor=next_cursor)
 
 
@@ -285,9 +292,9 @@ async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDe
 
 async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
-    assignee = await db.get(User, report.assignee_id) if report.assignee_id else None
+    assignee = await reports_repo.get_assignee(db, report.id) if report.assignee_id else None
     return ReportDetail(
-        **_item(report, job, assignee),
+        **_item(report, job, *(assignee or ())),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,

@@ -15,9 +15,13 @@ class ReportCreated(BaseModel):
 
 
 class Assignee(BaseModel):
+    """`active: false` = no longer an active member of the report's org; the assignment is kept
+    but display_name/email are withheld (null) so a former member's contact is not exposed."""
+
     id: str
     display_name: str | None
-    email: str
+    email: str | None
+    active: bool
 
 
 Progress = Literal["new", "reproducing", "reproduced", "triaged", "fixing", "dismissed", "closed"]

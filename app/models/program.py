@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ARRAY, Boolean, CheckConstraint, Integer, String, Text, text
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, DateTime, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -60,3 +60,18 @@ class ProgramScopeRevision(Base):
     private_cidrs: Mapped[list[str]] = text_array()
     created_by: Mapped[str | None] = fk("users.id", nullable=True, index=False)
     created_at: Mapped[datetime] = created_at()
+
+
+class OriginVerification(Base):
+    """Proof that the program owner controls an origin (`/.well-known/metaphor-verify.txt`).
+
+    One row per (program, origin); the token is public (it is published in that file).
+    """
+
+    __tablename__ = "origin_verifications"
+
+    program_id: Mapped[str] = fk("programs.id", ondelete="CASCADE", primary_key=True)
+    origin: Mapped[str] = mapped_column(String(2048), primary_key=True)
+    token: Mapped[str] = mapped_column(String(43))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

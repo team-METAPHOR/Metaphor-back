@@ -1,8 +1,9 @@
 from fastapi import APIRouter
 
 from app.api.dependencies import CurrentUser, DbSession
-from app.models import Program, ProgramScopeRevision
+from app.models import OriginVerification, Program, ProgramScopeRevision
 from app.schemas.program import (
+    OriginVerificationResponse,
     ProgramCreate,
     ProgramList,
     ProgramPatch,
@@ -10,6 +11,7 @@ from app.schemas.program import (
     ProgramSummary,
     ScopeResponse,
 )
+from app.services import origin_verification
 from app.services import programs as service
 
 router = APIRouter(prefix="/programs", tags=["programs"])
@@ -70,3 +72,23 @@ async def get_program(program_id: str, user: CurrentUser, db: DbSession):
 @router.patch("/{program_id}", response_model=ProgramResponse)
 async def update_program(program_id: str, body: ProgramPatch, user: CurrentUser, db: DbSession):
     return _full(*await service.update_program(db, user.id, program_id, body))
+
+
+def _verification(row: OriginVerification) -> OriginVerificationResponse:
+    return OriginVerificationResponse(
+        origin=row.origin,
+        token=row.token,
+        file_url=origin_verification.file_url(row.origin),
+        verified_at=row.verified_at,
+        last_checked_at=row.last_checked_at,
+    )
+
+
+@router.get("/{program_id}/origin-verification", response_model=OriginVerificationResponse)
+async def get_origin_verification(program_id: str, user: CurrentUser, db: DbSession):
+    return _verification(await origin_verification.get_verification(db, user.id, program_id))
+
+
+@router.post("/{program_id}/origin-verification/check", response_model=OriginVerificationResponse)
+async def check_origin_verification(program_id: str, user: CurrentUser, db: DbSession):
+    return _verification(await origin_verification.check_verification(db, user.id, program_id))

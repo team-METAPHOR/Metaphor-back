@@ -113,3 +113,11 @@ class ProgramSummary(BaseModel):
 
 class ProgramList(BaseModel):
     items: list[ProgramSummary]
+
+
+class OriginVerificationResponse(BaseModel):
+    origin: str
+    token: str  # public: published by the customer at file_url
+    file_url: str
+    verified_at: datetime | None
+    last_checked_at: datetime | None

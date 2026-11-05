@@ -1,9 +1,13 @@
 """Small seed helpers shared by tests. Each returns flushed ORM rows."""
 
+import secrets
+from datetime import UTC, datetime
+
 from app.core.ids import new_id
 from app.models import (
     Membership,
     Organization,
+    OriginVerification,
     Program,
     ProgramScopeRevision,
     Report,
@@ -28,7 +32,8 @@ async def make_user(session, org=None, role=None, email=None):
     return user
 
 
-async def make_program(session, org, *, daily_job_limit=50, **revision):
+async def make_program(session, org, *, daily_job_limit=50, verified=True, **revision):
+    """`verified=True` marks the base_url origin as ownership-verified (jobs may run)."""
     program = Program(
         id=new_id(),
         owner_org_id=org.id,
@@ -47,6 +52,15 @@ async def make_program(session, org, *, daily_job_limit=50, **revision):
     }
     values.update(revision)
     session.add(ProgramScopeRevision(program_id=program.id, revision=1, **values))
+    if verified:
+        session.add(
+            OriginVerification(
+                program_id=program.id,
+                origin=values["base_url"].rstrip("/"),
+                token=secrets.token_urlsafe(32),
+                verified_at=datetime.now(UTC),
+            )
+        )
     await session.flush()
     return program
 

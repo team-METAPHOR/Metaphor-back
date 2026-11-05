@@ -181,11 +181,25 @@ async def test_create_job_daily_limit_429(db_session, world):
 
 async def test_create_job_uses_given_snapshot_for_retest(db_session, world):
     *_, report = world
-    snapshot = {"program_id": report.program_id, "scope_revision": 1, "app_version": "b2"}
+    snapshot = {
+        "program_id": report.program_id,
+        "scope_revision": 1,
+        "base_url": "https://staging.example.com/",
+        "app_version": "b2",
+    }
     async with db_session.begin():
         job = await create_job(db_session, report, "retest", snapshot=snapshot, app_version="b2")
     assert job.scope_snapshot == snapshot
     assert job.app_version == "b2"
+
+
+async def test_create_job_requires_verified_snapshot_origin(db_session, world):
+    *_, report = world
+    snapshot = {"program_id": report.program_id, "base_url": "https://other.example.com/"}
+    with pytest.raises(ApiError) as error:
+        async with db_session.begin():
+            await create_job(db_session, report, "retest", snapshot=snapshot)
+    assert (error.value.status, error.value.code) == (422, "ORIGIN_NOT_VERIFIED")
 
 
 async def test_create_job_rejects_unknown_kind(db_session, world):

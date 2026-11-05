@@ -10,8 +10,10 @@ from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision, Report, ValidationJob
 from app.models.validation_job import JOB_KINDS
+from app.repositories import programs as programs_repo
 from app.services.audit import count_actions
 from app.services.limits import enforce_rate_limit, lock_key, since
+from app.services.origin_verification import origin_of
 
 # Customer-requested jobs (fresh/retest/clarification answers) per user per hour, combined.
 JOB_REQUEST_HOURLY_LIMIT = 30
@@ -64,7 +66,8 @@ async def create_job(
     """Queue a job for `report` inside the caller's transaction.
 
     Raises 410 REPORT_EXPIRED (scrubbed by the retention purge), 429 DAILY_LIMIT_EXCEEDED
-    (per program, UTC day) or 409 ACTIVE_JOB_EXISTS.
+    (per program, UTC day), 422 ORIGIN_NOT_VERIFIED (the snapshot's origin has no ownership
+    verification) or 409 ACTIVE_JOB_EXISTS.
     `snapshot` overrides the current revision (retest reuses its baseline's snapshot).
     """
     if kind not in JOB_KINDS:
@@ -98,6 +101,10 @@ async def create_job(
         snapshot = scope_snapshot(program, revision)
         if app_version is not None:
             snapshot["app_version"] = app_version
+    if not await programs_repo.is_origin_verified(
+        session, program.id, origin_of(snapshot["base_url"])
+    ):
+        raise ApiError(422, "ORIGIN_NOT_VERIFIED", "테스트 대상 도메인의 소유 확인이 필요합니다.")
 
     job = ValidationJob(
         id=new_id(),

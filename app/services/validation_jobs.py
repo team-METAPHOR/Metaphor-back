@@ -7,6 +7,7 @@ from app.core.errors import ApiError
 from app.core.pagination import decode_cursor, encode_cursor
 from app.models import ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
+from app.repositories import live_previews as live_repo
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobList, JobOut, JobResult
 from app.services.access import WRITE_ROLES, org_role
@@ -107,6 +108,8 @@ async def cancel_job(db: AsyncSession, user_id: str, job_id: str) -> dict:
                 "이미 종료된 작업입니다.",
                 detail={"status": status},
             )
+        # Viewers must not keep seeing the last frame as live while the worker stops.
+        await live_repo.delete_for_job(db, job.id)
         await record_audit(
             db,
             actor_id=user_id,

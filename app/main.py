@@ -13,6 +13,7 @@ from app.core.logging import configure_logging
 from app.core.security_headers import security_headers_middleware
 from app.core.widget_cors import widget_cors_middleware
 from app.db.session import engine
+from app.integrations import live_notify
 
 
 @asynccontextmanager
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await live_notify.shutdown()
         await engine.dispose()
 
 

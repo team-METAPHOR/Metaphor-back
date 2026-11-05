@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     auth,
     evidence,
     health,
+    live_preview,
     orgs,
     programs,
     reports,
@@ -19,6 +20,8 @@ api_router = APIRouter()
 api_router.include_router(health.router)
 # Public Web SDK API: no cookie auth, no CSRF guard (per-program Origin checks instead).
 api_router.include_router(widget.router)
+# WebSocket: checks Origin and the session cookie itself (require_csrf is HTTP-only).
+api_router.include_router(live_preview.router)
 
 # Cookie-auth routes. /widget/* mounts on api_router directly: no cookies, no CSRF guard.
 platform_router = APIRouter(dependencies=[Depends(require_csrf)])

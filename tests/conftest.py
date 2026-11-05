@@ -29,6 +29,17 @@ def _default_test_database_url() -> str:
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or _default_test_database_url()
 
 
+TEST_HASH_SECRET = "test-only-hash-secret-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _hash_secret(monkeypatch):
+    """The app has no unkeyed hash fallback (app/core/hashing.py), so every test gets a key."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "ip_hash_secret", TEST_HASH_SECRET)
+
+
 @pytest.fixture(scope="session")
 async def engine():
     # Tests build the schema from models; the app itself only uses Alembic.

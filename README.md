@@ -72,7 +72,10 @@ uv run uvicorn app.main:app --reload
 
 ### 환경 변수 (API)
 
-- `IP_HASH_SECRET`: 위젯 신고자 IP를 HMAC-SHA256으로 해시할 때 쓰는 키입니다. 원본 IP는 저장하지 않습니다. 비어 있으면 위젯 신고 API가 503 `WIDGET_UNAVAILABLE`을 반환합니다. 환경마다 긴 무작위 값을 넣으세요.
+- `IP_HASH_SECRET` (필수): 로그인 이메일, 클라이언트 IP, 위젯 신고자 IP를 HMAC-SHA256으로 해시할 때 쓰는 키입니다. 원본과 키 없는 SHA-256 값은 저장하지 않습니다. 용도(`login-email`, `login-ip-email`, `client-ip`)마다 이 키에서 별도 키를 파생하므로 같은 값이라도 용도가 다르면 해시가 다릅니다. 32바이트 이상이어야 하며, 없거나 짧으면 API가 시작되지 않습니다. 생성: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+  - 개발 모드: `DEBUG=true`이고 `IP_HASH_SECRET`가 비어 있을 때만 코드에 들어 있는 공개 개발용 키를 씁니다. 공유 환경과 운영 환경에서는 쓰지 마세요.
+  - 키 회전: 새 키로 바꾸면 기존 해시와 더 이상 일치하지 않습니다. 진행 중이던 로그인 실패·가입·위젯 IP 한도 창이 초기화되고(최대 15분~1시간 동안 한도가 느슨해짐), 이전 키로 남긴 `audit_events.target` 해시는 새 해시와 조인되지 않습니다. 기존 해시는 다시 계산할 수 없으므로 그대로 두고 보존 기간 정리로 사라지게 합니다.
+- 로그인 제한: 같은 클라이언트 IP와 이메일 조합으로 15분 안에 5번 실패하면 그 조합만 429 `LOGIN_THROTTLED`가 됩니다. 계정 전체 기준으로는 15분에 50번 실패해야 막히므로, 다른 IP에서 몇 번 틀린 것만으로는 올바른 비밀번호가 막히지 않습니다. 로그인에 성공하면 두 카운터가 모두 초기화됩니다. 존재하지 않는 이메일에도 같은 제한과 응답이 적용됩니다.
 - `TEST_ACCOUNT_PUBLIC_KEY`: 프로그램 테스트 계정을 암호화하는 RSA(3072비트 이상) 공개키 PEM입니다. 비밀값은 아닙니다. 한 줄로 넣을 때는 줄바꿈을 `\n`으로 적습니다. 비어 있으면 `PUT /programs/{id}/test-account`가 503 `TEST_ACCOUNT_UNAVAILABLE`을 반환합니다. 키 생성은 `uv run python -m app.worker.keys <디렉터리>`([테스트 계정 API](docs/api/test-account.md)).
 - 프록시·로드밸런서 뒤에서는 `uvicorn --proxy-headers --forwarded-allow-ips=<LB IP>`로 실행해야 IP별 신고 한도가 실제 클라이언트 기준으로 동작합니다.
 

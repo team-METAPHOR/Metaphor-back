@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     storage_root: Path = Path("var/storage")
     # Exact origins of the Metaphor platform frontend (CSRF check for cookie sessions).
     allowed_origins: list[str] = ["http://localhost:3000"]
-    # HMAC key for widget client IPs (raw IPs are never stored). Unset → widget reports 503.
+    # HMAC key (>= 32 bytes) for login emails and client IPs; see app/core/hashing.py.
+    # Required unless DEBUG=true (then empty means the public dev-only key).
     ip_hash_secret: str = Field(default="", repr=False)
     # Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is trusted for the client IP.
     trusted_proxies: list[str] = []

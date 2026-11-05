@@ -22,7 +22,9 @@ TOKEN = "Bearer abc.def.ghi"
 
 @pytest.fixture(autouse=True)
 def ip_secret(monkeypatch):
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "test-ip-secret")
+    monkeypatch.setattr(
+        get_settings(), "ip_hash_secret", "test-ip-secret-0123456789abcdef0123456789"
+    )
 
 
 @pytest.fixture

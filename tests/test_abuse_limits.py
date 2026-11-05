@@ -6,27 +6,71 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.models import AuditEvent
+from tests.conftest import TEST_HASH_SECRET
 from tests.test_auth import login, signup
 
 
-async def test_login_failure_key_is_hmac_when_secret_set(client, db_session, monkeypatch):
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "k")
+def _expected(purpose: str, value: str) -> str:
+    key = hmac.new(TEST_HASH_SECRET.encode(), f"metaphor-hash:{purpose}".encode(), hashlib.sha256)
+    return hmac.new(key.digest(), value.encode(), hashlib.sha256).hexdigest()
+
+
+async def test_login_failure_keys_are_per_purpose_hmac(client, db_session):
     await signup(client)
     assert (await login(client, password="wrong-password-123")).status_code == 401
-    target = await db_session.scalar(
-        select(AuditEvent.target).where(AuditEvent.action == "auth.login_failed")
+    targets = set(
+        await db_session.scalars(
+            select(AuditEvent.target).where(AuditEvent.action == "auth.login_failed")
+        )
     )
-    assert target == hmac.new(b"k", b"dev@example.com", hashlib.sha256).hexdigest()
+    # ASGITransport's peer is 127.0.0.1.
+    assert targets == {
+        _expected("login-email", "dev@example.com"),
+        _expected("login-ip-email", "127.0.0.1\ndev@example.com"),
+    }
+    assert hashlib.sha256(b"dev@example.com").hexdigest() not in targets
 
 
-async def test_login_failure_key_falls_back_to_sha256(client, db_session, monkeypatch):
+def test_keyed_hash_deterministic_and_separated_by_purpose():
+    from app.core.hashing import keyed_hash
+
+    assert keyed_hash("client-ip", "1.2.3.4") == keyed_hash("client-ip", "1.2.3.4")
+    assert keyed_hash("client-ip", "1.2.3.4") != keyed_hash("login-email", "1.2.3.4")
+    assert keyed_hash("client-ip", "1.2.3.4") != hashlib.sha256(b"1.2.3.4").hexdigest()
+
+
+def test_no_hash_without_secret_outside_debug(monkeypatch):
+    from app.core.hashing import keyed_hash, lookup_hash
+
+    monkeypatch.setattr(get_settings(), "debug", False)
+    for secret in ("", "short-secret"):
+        monkeypatch.setattr(get_settings(), "ip_hash_secret", secret)
+        assert keyed_hash("login-email", "dev@example.com") is None
+        with pytest.raises(RuntimeError):
+            lookup_hash("login-email", "dev@example.com")
+
+
+@pytest.mark.parametrize("secret", ["", "x" * 31])
+async def test_production_startup_fails_without_long_secret(monkeypatch, secret):
+    from app.main import app
+
+    monkeypatch.setattr(get_settings(), "debug", False)
+    monkeypatch.setattr(get_settings(), "ip_hash_secret", secret)
+    with pytest.raises(RuntimeError, match="IP_HASH_SECRET"):
+        async with app.router.lifespan_context(app):
+            pass
+
+
+def test_debug_mode_uses_explicit_dev_key(monkeypatch):
+    from app.core.hashing import DEV_HASH_SECRET, check_hash_secret, keyed_hash
+
+    monkeypatch.setattr(get_settings(), "debug", True)
     monkeypatch.setattr(get_settings(), "ip_hash_secret", "")
-    await signup(client)
-    assert (await login(client, password="wrong-password-123")).status_code == 401
-    target = await db_session.scalar(
-        select(AuditEvent.target).where(AuditEvent.action == "auth.login_failed")
-    )
-    assert target == hashlib.sha256(b"dev@example.com").hexdigest()
+    check_hash_secret(get_settings())
+    monkeypatch.setattr(get_settings(), "ip_hash_secret", DEV_HASH_SECRET)
+    explicit = keyed_hash("client-ip", "1.2.3.4")
+    monkeypatch.setattr(get_settings(), "ip_hash_secret", "")
+    assert keyed_hash("client-ip", "1.2.3.4") == explicit
 
 
 def _request(peer: str | None, xff: list[str] | None = None):
@@ -83,7 +127,6 @@ async def test_widget_uses_forwarded_client_ip_behind_trusted_proxy(client, monk
 async def test_signup_throttled_per_client_ip_429(client, db_session, monkeypatch):
     from app.services.auth import SIGNUP_HOURLY_LIMIT
 
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "k")
     for i in range(SIGNUP_HOURLY_LIMIT):
         await signup(client, email=f"u{i}@example.com")
     response = await client.post(
@@ -98,7 +141,7 @@ async def test_signup_throttled_per_client_ip_429(client, db_session, monkeypatc
             select(AuditEvent.target).where(AuditEvent.action == "auth.signup")
         )
     ).all()
-    assert targets == [hmac.new(b"k", b"127.0.0.1", hashlib.sha256).hexdigest()] * 5
+    assert targets == [_expected("client-ip", "127.0.0.1")] * 5
     # Another client (behind a trusted proxy) is unaffected.
     monkeypatch.setattr(get_settings(), "trusted_proxies", ["127.0.0.1"])
     other = await client.post(

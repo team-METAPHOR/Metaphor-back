@@ -4,11 +4,11 @@ import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.core.hashing import lookup_hash
+from app.core.hashing import CLIENT_IP, LOGIN_EMAIL, LOGIN_IP_EMAIL, lookup_hash
 from app.core.ids import new_id
 from app.models import AuditEvent, Session, User
 from app.repositories import users as repo
@@ -18,6 +18,8 @@ from app.services.limits import enforce_rate_limit, lock_key, since
 SESSION_TTL = timedelta(days=14)
 LOGIN_FAILED = "auth.login_failed"
 LOGIN_MAX_FAILURES = 5
+LOGIN_ACCOUNT_MAX_FAILURES = 50
+LOGIN_SUCCEEDED = "auth.login_succeeded"
 LOGIN_WINDOW = {"minutes": 15}
 PASSWORD_CHANGE = "auth.password_change"
 PASSWORD_CHANGE_FAILED = "auth.password_change_failed"
@@ -60,7 +62,7 @@ async def signup(
 ) -> User:
     """Create a user. 5 signups per client IP per hour, counted from audit_events."""
     email = email.strip().lower()
-    ip_key = lookup_hash(client_ip)
+    ip_key = lookup_hash(CLIENT_IP, client_ip)
     password_hash = await asyncio.to_thread(hash_password, password)
     async with db.begin():
         await lock_key(db, f"signup:{ip_key}")
@@ -90,33 +92,53 @@ async def signup(
         return user
 
 
-async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]:
+def _failures(key: str, cleared_by: str) -> Select:
+    """LOGIN_FAILED rows for `key` in the window, after the last success that clears them."""
+    last_success = (
+        select(func.max(AuditEvent.created_at))
+        .where(AuditEvent.action == LOGIN_SUCCEEDED, AuditEvent.target == cleared_by)
+        .scalar_subquery()
+    )
+    return (
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(
+            AuditEvent.action == LOGIN_FAILED,
+            AuditEvent.target == key,
+            AuditEvent.created_at >= since(**LOGIN_WINDOW),
+            AuditEvent.created_at > func.coalesce(last_success, datetime.min.replace(tzinfo=UTC)),
+        )
+    )
+
+
+async def login(db: AsyncSession, email: str, password: str, client_ip: str) -> tuple[User, str]:
     """Return the user and a fresh raw session token. Old sessions are revoked (no fixation).
 
-    5 failures for one email within 15 minutes block that email, even with the right password.
-    Failures are counted from audit_events (shared by every API process), keyed by
-    lookup_hash(email) so the raw address is never stored.
+    Two failure counters, both from audit_events and keyed by HMAC so no raw PII is stored:
+    - client IP + email: 5 failures in 15 minutes block that pair (brute force from one IP).
+    - email alone: 50 failures in 15 minutes block the account (distributed guessing). It is
+      high so a handful of failures from other IPs never lock out the right password.
+    A success clears both counters. Limits apply to unknown emails too, so the responses do
+    not reveal which accounts exist.
     """
     email = email.strip().lower()
-    email_hash = lookup_hash(email)
+    account_key = lookup_hash(LOGIN_EMAIL, email)
+    pair_key = lookup_hash(LOGIN_IP_EMAIL, f"{client_ip}\n{email}")
+    throttled = {
+        "code": "LOGIN_THROTTLED",
+        "message": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    }
     async with db.begin():
         # Serialize logins per email until commit, so the count-then-record below is atomic.
-        await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(email_hash, 0))))
-        failures = (
-            select(func.count())
-            .select_from(AuditEvent)
-            .where(
-                AuditEvent.action == LOGIN_FAILED,
-                AuditEvent.target == email_hash,
-                AuditEvent.created_at >= since(**LOGIN_WINDOW),
-            )
+        await lock_key(db, f"login:{account_key}")
+        await enforce_rate_limit(
+            db, _failures(pair_key, pair_key), limit=LOGIN_MAX_FAILURES, **throttled
         )
         await enforce_rate_limit(
             db,
-            failures,
-            limit=LOGIN_MAX_FAILURES,
-            code="LOGIN_THROTTLED",
-            message="로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+            _failures(account_key, account_key),
+            limit=LOGIN_ACCOUNT_MAX_FAILURES,
+            **throttled,
         )
         user = await repo.get_by_email(db, email)
         stored = user.password_hash if user else _DUMMY_HASH
@@ -128,9 +150,14 @@ async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]
             await repo.add_session(
                 db, Session(id=token_hash(token), user_id=user.id, expires_at=expires_at)
             )
+            for key in (pair_key, account_key):
+                await record_audit(
+                    db, actor_id=user.id, org_id=None, action=LOGIN_SUCCEEDED, target=key
+                )
             return user, token
         # Recorded in this transaction, which commits on block exit; raise only after that.
-        await record_audit(db, actor_id=None, org_id=None, action=LOGIN_FAILED, target=email_hash)
+        for key in (pair_key, account_key):
+            await record_audit(db, actor_id=None, org_id=None, action=LOGIN_FAILED, target=key)
     raise ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password")
 
 

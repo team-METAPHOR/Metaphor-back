@@ -17,7 +17,9 @@ from tests.test_widget_public import STAGING, payload, post
 
 @pytest.fixture(autouse=True)
 def ip_secret(monkeypatch):
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "test-ip-secret")
+    monkeypatch.setattr(
+        get_settings(), "ip_hash_secret", "test-ip-secret-0123456789abcdef0123456789"
+    )
 
 
 async def org_world(client, db_session, name):

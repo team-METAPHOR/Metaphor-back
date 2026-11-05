@@ -25,7 +25,9 @@ pytestmark = pytest.mark.browser
 
 @pytest.fixture(autouse=True)
 def _worker(worker_env, monkeypatch):
-    monkeypatch.setattr(get_settings(), "ip_hash_secret", "e2e-secret")
+    monkeypatch.setattr(
+        get_settings(), "ip_hash_secret", "e2e-secret-0123456789abcdef0123456789abcdef"
+    )
     return worker_env
 
 

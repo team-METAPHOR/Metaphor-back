@@ -83,25 +83,6 @@ def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path) -> None
         )
 
 
-def close_report(conn: psycopg.Connection, report_id: str, org_id: str, job_id: str) -> None:
-    """마감: a passing retest closes the report (system actor). Caller's transaction."""
-    row = conn.execute(
-        "SELECT workflow_status FROM reports WHERE id = %s FOR UPDATE", (report_id,)
-    ).fetchone()
-    if row is None or row[0] == "closed":
-        return
-    conn.execute(
-        "UPDATE reports SET workflow_status = 'closed', closed_at = now(), updated_at = now() "
-        "WHERE id = %s",
-        (report_id,),
-    )
-    conn.execute(
-        "INSERT INTO audit_events (actor_id, org_id, action, target, detail) "
-        "VALUES (NULL, %s, 'report.workflow', %s, %s)",
-        (org_id, report_id, Jsonb({"from": row[0], "to": "closed", "job_id": job_id})),
-    )
-
-
 def persist_result(
     conn: psycopg.Connection,
     job_id: str,
@@ -128,7 +109,6 @@ def persist_result(
                 analysis_available = %(analysis)s, human_review_required = %(review)s,
                 lease_owner = NULL, lease_expires_at = NULL, finished_at = now()
             WHERE id = %(id)s AND status IN ('running', 'cancelling')
-            RETURNING kind
             """,
             {
                 "id": job_id,
@@ -143,12 +123,8 @@ def persist_result(
                 "review": report.get("human_review_required", True),
             },
         )
-        row = cur.fetchone()
-        if row is None:
+        if cur.rowcount != 1:
             return False
-        passed = raw["status"] == "completed" and verdict.get("value") == "not_reproduced"
-        if row[0] == "retest" and passed:
-            close_report(conn, report_id, org_id, job_id)
         conn.execute(
             "INSERT INTO qa_results (job_id, schema_version, raw) VALUES (%s, %s, %s)",
             (job_id, int(report.get("schema_version") or 1), Jsonb(raw)),

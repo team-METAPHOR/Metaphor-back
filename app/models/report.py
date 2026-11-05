@@ -21,7 +21,7 @@ REPORT_SOURCES = ("platform", "widget")
 ERROR_TYPES = ("manual", "js_error", "unhandled_rejection", "http_5xx")
 ORIGIN_KINDS = ("approved", "mapped")
 # received: 신규, fixing: 버그 수정 중, dismissed: 버그 아님/중복 (manual terminal),
-# closed: 마감 — set only by the worker when a retest passes.
+# closed: 마감 — set by a person, only once a retest verified the fix.
 WORKFLOW_STATUSES = ("received", "fixing", "dismissed", "closed")
 MANUAL_WORKFLOW_STATUSES = ("received", "fixing", "dismissed")
 

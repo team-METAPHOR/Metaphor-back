@@ -4,6 +4,7 @@ from sqlalchemy import Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Membership, Organization, Report, User, ValidationJob
+from app.models.validation_job import ACTIVE_JOB_STATUSES
 
 
 async def get(db: AsyncSession, report_id: str) -> Report | None:
@@ -12,6 +13,31 @@ async def get(db: AsyncSession, report_id: str) -> Report | None:
 
 async def get_by_number(db: AsyncSession, org_id: str, number: int) -> Report | None:
     return await db.scalar(select(Report).where(Report.org_id == org_id, Report.number == number))
+
+
+async def fix_verified_ids(db: AsyncSession, report_ids: list[str]) -> set[str]:
+    """Reports whose latest finished job is a retest that passed (completed, not_reproduced).
+    Jobs of a report run one at a time, so creation order is finish order."""
+    if not report_ids:
+        return set()
+    latest = (
+        select(
+            ValidationJob.report_id, ValidationJob.kind, ValidationJob.status, ValidationJob.verdict
+        )
+        .where(
+            ValidationJob.report_id.in_(report_ids),
+            ValidationJob.status.not_in(ACTIVE_JOB_STATUSES),
+        )
+        .distinct(ValidationJob.report_id)
+        .order_by(ValidationJob.report_id, ValidationJob.created_at.desc(), ValidationJob.id.desc())
+        .subquery()
+    )
+    query = select(latest.c.report_id).where(
+        latest.c.kind == "retest",
+        latest.c.status == "completed",
+        latest.c.verdict == "not_reproduced",
+    )
+    return set((await db.scalars(query)).all())
 
 
 def count_by_author(author_id: str, since: datetime) -> Select:

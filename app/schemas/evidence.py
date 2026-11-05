@@ -37,6 +37,35 @@ class AttemptVideo(BaseModel):
     capture_error: str | None
 
 
+class BlockedRequest(BaseModel):
+    """Out-of-scope subresource the engine blocked and continued past (0.6.0)."""
+
+    method: str | None
+    url: str  # query string and fragment removed
+    resource_type: str | None
+    blocker: str | None
+    send_attempted: bool | None  # true only for a redirect whose first in-scope hop was sent
+    non_fatal: bool | None
+
+
+class StateChangingRequest(BaseModel):
+    """Approved-write audit (0.6.0): method/path/status only, never bodies or headers."""
+
+    method: str
+    path: str
+    send_attempted: bool | None
+    status: int | None
+    blocker: str | None
+
+
+class StateChangeApproval(BaseModel):
+    """The approval the run used (`environment.state_changes`); compared on retest."""
+
+    environment: Literal["test", "staging"]
+    reset_adapter_id: str
+    allowed_requests: list[tuple[str, str]]
+
+
 class DiagnosisAttempt(BaseModel):
     attempt: int
     stage: str | None
@@ -53,6 +82,8 @@ class DiagnosisAttempt(BaseModel):
     observation_ids: list[str]
     timeline: list[TimelineEntry]
     video: AttemptVideo | None
+    blocked_requests: list[BlockedRequest] = []
+    state_changing_requests: list[StateChangingRequest] = []
 
 
 class ObservedFact(BaseModel):
@@ -62,6 +93,8 @@ class ObservedFact(BaseModel):
     status: int | None
     blocker: str | None
     observation_ids: list[str]
+    # Recorded and continued past (0.6.0): a subresource 4xx or a blocked out-of-scope request.
+    non_fatal: bool | None = None
 
 
 class NextAction(BaseModel):
@@ -112,6 +145,8 @@ class Diagnosis(BaseModel):
     missing_information: AiQuestions
     hypotheses: AiHypotheses
     timings: Timings | None
+    # Approved test writes of this run, or null for a read-only run.
+    state_changes: StateChangeApproval | None = None
 
 
 class DeveloperHandoff(BaseModel):

@@ -127,6 +127,8 @@ async def test_analysis_failed_but_diagnosis_present(client, db_session, world):
             "duration_seconds": 2.0,
             "capture_error": None,
         },
+        "blocked_requests": [],
+        "state_changing_requests": [],
     }
     assert diagnosis["attempts"][1]["video"] is None
     assert diagnosis["timings"] == {"total_seconds": 9.5, "model_seconds": 3.0}
@@ -177,6 +179,7 @@ async def test_login_required_blocker(client, db_session, world):  # noqa: F811
             "status": 401,
             "blocker": None,
             "observation_ids": ["ob1"],
+            "non_fatal": None,
         }
     ]
     codes = {a["code"]: a for a in diagnosis["next_actions"]}

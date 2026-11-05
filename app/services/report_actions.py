@@ -28,6 +28,14 @@ ACTION_MESSAGES = {
         "테스트 계정이나 세션은 HTTPS 대상에서만 사용할 수 있습니다. "
         "프로그램 원점을 유효한 인증서가 있는 HTTPS 주소로 다시 등록해 주세요"
     ),
+    "CHECK_TEST_RESET": (
+        "테스트 데이터 서버 초기화를 하지 못해 쓰기 검증을 멈췄습니다. "
+        "초기화 어댑터와 테스트 계정 설정을 확인해 주세요"
+    ),
+    "REVIEW_WRITE_APPROVAL": (
+        "재현에 승인되지 않은 쓰기 요청이 필요했습니다. "
+        "필요한 경로만 관리자 쓰기 승인에 추가할지 검토해 주세요"
+    ),
     "ANSWER_QUESTIONS": "추가 질문에 답하면 다시 검증합니다",
     "WAIT_FOR_PROVIDER": "AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요",
     "RETRY_PROVIDER_LATER": "AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요",
@@ -58,6 +66,18 @@ CODE_ACTIONS = {
     "DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "PRIVATE_DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "NAVIGATION_FAILED": "CHECK_TARGET_URL",
+    # Engine 0.6.0 approved writes: the reset before an attempt failed (no write sent), or the
+    # worker refused the reset setup before the engine ran (app/worker/runner.py, resets.py).
+    "RESET_FAILED": "CHECK_TEST_RESET",
+    "STATE_RESET_REQUIRED": "CHECK_TEST_RESET",
+    "STATE_CHANGES_SESSION_CONFLICT": "CHECK_TEST_RESET",
+    "RESET_ACCOUNT_MISSING": "CHECK_TEST_RESET",
+    "RESET_ACCOUNT_NOT_APPROVED": "CHECK_TEST_RESET",
+    "RESET_TOKEN_MISSING": "CHECK_TEST_RESET",
+    "RESET_TARGET_NOT_APPROVED": "CHECK_TEST_RESET",
+    # A write the run needed was not approved (read-only run, or outside the approval).
+    "METHOD_NOT_ALLOWED": "REVIEW_WRITE_APPROVAL",
+    "STATE_CHANGE_OUT_OF_SCOPE": "REVIEW_WRITE_APPROVAL",
     # Engine model providers (openai/groq): 429 → wait for Retry-After (job.retry_available_at);
     # timeout/unreachable/other HTTP status → transient; 401/403 key or oversized response →
     # the operator, since rerunning would fail the same way. Provider bodies are never stored.

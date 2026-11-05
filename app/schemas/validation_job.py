@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.evidence import Diagnosis
+
 
 class JobOut(BaseModel):
     """Public job view. No engine id, storage paths or scope snapshot."""
@@ -93,6 +95,8 @@ class ConditionResultItem(BaseModel):
     error_code: str | None
     stop_point: str | None  # plain text; never contains query strings or typed values
     duration_ms: int | None
+    # The child's execution diagnosis (same whitelist as the developer handoff), or null.
+    diagnosis: Diagnosis | None = None
 
 
 class ConditionResultList(BaseModel):

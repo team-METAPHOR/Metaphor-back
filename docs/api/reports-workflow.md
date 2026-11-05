@@ -175,6 +175,8 @@
 | `CHECK_TEST_ACCOUNT` | 등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요 | `LOGIN_FAILED`(엔진 자동 로그인 실패: 계정 오류, 폼 불일치, 성공 신호 미확인). 작업 `error_code` 또는 재현 시도 근거의 `blocker` |
 | `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
 | `USE_HTTPS_FOR_CREDENTIALS` | 테스트 계정이나 세션은 HTTPS 대상에서만 사용할 수 있습니다. 프로그램 원점을 유효한 인증서가 있는 HTTPS 주소로 다시 등록해 주세요 | `CREDENTIALS_REQUIRE_HTTPS`(엔진 0.4.1 또는 워커 실행 전 검사: HTTPS가 아닌 원점에 테스트 세션·계정을 쓰려 함) |
+| `CHECK_TEST_RESET` | 테스트 데이터 서버 초기화를 하지 못해 쓰기 검증을 멈췄습니다. 초기화 어댑터와 테스트 계정 설정을 확인해 주세요 | `RESET_FAILED`(엔진 0.6.0: 시도 전 초기화 실패, 쓰기 미전송), `STATE_RESET_REQUIRED`, `STATE_CHANGES_SESSION_CONFLICT`, `RESET_ACCOUNT_MISSING`, `RESET_ACCOUNT_NOT_APPROVED`, `RESET_TOKEN_MISSING`, `RESET_TARGET_NOT_APPROVED`(워커 실행 전 검사, [승인된 테스트 쓰기](./state-changes.md)) |
+| `REVIEW_WRITE_APPROVAL` | 재현에 승인되지 않은 쓰기 요청이 필요했습니다. 필요한 경로만 관리자 쓰기 승인에 추가할지 검토해 주세요 | `METHOD_NOT_ALLOWED`(읽기 전용 실행에서 쓰기 시도), `STATE_CHANGE_OUT_OF_SCOPE`(승인 규칙 밖 쓰기) |
 | `ANSWER_QUESTIONS` | 추가 질문에 답하면 다시 검증합니다 | 최신 작업 상태가 `needs_info` |
 | `WAIT_FOR_PROVIDER` | AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요 | `MODEL_RATE_LIMITED`(공급자 429). 작업의 `retry_available_at` 이후 재요청 |
 | `RETRY_PROVIDER_LATER` | AI 응답이 일시적으로 실패했습니다. 잠시 후 다시 요청해 주세요 | `MODEL_TIMEOUT`, `MODEL_UNAVAILABLE`(연결 실패), `MODEL_HTTP_ERROR`(그 밖의 HTTP 오류) |
@@ -217,10 +219,21 @@
   (`action`, `target`; 입력값은 내려주지 않고 URL은 쿼리·프래그먼트 제거), `blocker`, `ready`,
   `expected_observed`, `symptom_observed`, `elapsed_seconds`, `evidence_ids`, `observation_ids`,
   `timeline[]`(`stage`, `step_index`, `elapsed_seconds`), `video`(`status`, `start_offset_seconds`,
-  `duration_seconds`, `capture_error`; 파일 다운로드는 아직 없음).
-- `observed_facts[]`: 관찰된 4xx/5xx·차단 네트워크 응답(`method`, 쿼리 제거 `url`, `status`).
+  `duration_seconds`, `capture_error`; 파일 다운로드는 아직 없음),
+  `blocked_requests[]`(엔진 0.6.0: 범위 밖이라 차단하고 계속한 하위 요청. `method`, 쿼리 제거 `url`,
+  `resource_type`, `blocker`, `send_attempted`, `non_fatal`), `state_changing_requests[]`(승인된 쓰기
+  감사 기록. `method`, `path`(쿼리 제거), `send_attempted`, `status`, `blocker`; 본문·쿠키·헤더 없음).
+- `observed_facts[]`: 관찰된 4xx/5xx·차단 네트워크 응답(`method`, 쿼리 제거 `url`, `status`,
+  `non_fatal`: 엔진이 기록만 하고 계속한 응답이면 `true`, 아니면 `null`).
+- `state_changes`: 이 실행에 쓰인 쓰기 승인(`environment`, `reset_adapter_id`, `allowed_requests`),
+  읽기 전용이면 `null`([승인된 테스트 쓰기](./state-changes.md)).
 - `next_actions[]`: 누가(`owner`: `reporter`/`operator`/`backend`/`developer`) 무엇을 보충할지
-  (`code`, `message`, `required_fields`, `retry_after_seconds`).
+  (`code`, `message`, `required_fields`, `retry_after_seconds`). 0.6.0은 차단한 하위 리소스가 있으면
+  `REVIEW_BLOCKED_SUBRESOURCES`(`developer`)를 추가합니다.
+
+원본 결과(`GET /validation-jobs/{id}/result`)는 엔진 결과 전체를 개인정보 마스킹만 거쳐 저장한 그대로이므로
+`environment.state_changes`, `run.evidence[].blocked_requests`, `run.evidence[].state_changing_requests`,
+`observations[].network[].non_fatal`, `diagnosis.next_actions`가 모두 남습니다.
 - `missing_information`, `hypotheses`는 모델 출력이라 각각 `source: "ai"`를 달고, `hypotheses`는
   `root_cause_confirmed: false`인 가설입니다.
 

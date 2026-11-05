@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.api.dependencies import require_csrf
 from app.api.v1.endpoints import (
     auth,
+    evaluation,
     evidence,
     health,
     live_preview,
@@ -34,4 +35,5 @@ platform_router.include_router(test_accounts.router)
 platform_router.include_router(reports.router)
 platform_router.include_router(validation_jobs.router)
 platform_router.include_router(evidence.router)
+platform_router.include_router(evaluation.router)
 api_router.include_router(platform_router)

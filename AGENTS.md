@@ -93,7 +93,8 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 - At most one active job (`queued`/`running`/`cancelling`) per report — enforced by a partial
   unique index, not only app code.
 - `reports.workflow_status` (human review) is separate from job status and AI classification.
-  Its only system transition is `closed`, set by the worker when a retest passes.
+  The system never changes it: a passing retest only sets `fix_verified`, and a person closes
+  the report (`closed` is allowed only while `fix_verified` is true).
 - Every job creation goes through the shared `create_job` service (daily limit, active-job check).
 - Every report creation goes through the shared `create_report` service (platform and widget).
 - Cross-org access returns **404**, not 403, so existence is not leaked.

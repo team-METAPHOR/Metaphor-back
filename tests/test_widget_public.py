@@ -251,7 +251,7 @@ async def test_config_screenshot_allowed_per_origin(client, world):
         "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20},
         "mask_selectors": BUILTIN_MASKS,
     }
-    assert staging.headers["Cache-Control"] == "public, max-age=60"
+    assert staging.headers["Cache-Control"] == "no-store"
     assert "Origin" in staging.headers["Vary"]
     assert staging.headers["Access-Control-Allow-Origin"] == STAGING
     assert world["program"].id not in staging.text

@@ -38,7 +38,7 @@
 - `video_enabled`: `false`는 영상이 꺼진 실행(이때 `videos`는 빈 목록), `null`은 작업이 아직 진행 중이거나 보존 기간이 지나 결과가 지워진 경우입니다.
 - `videos[].status`: `ready`(재생 가능), `failed`(인코딩·저장 실패), `unavailable`(인코더 없음), `empty`(프레임 없음), `interrupted`(마무리 중 취소). `truncated: true`는 길이·용량 한도로 잘린 부분 녹화이며 이유는 `capture_error`(`VIDEO_FRAME_BUDGET`, `VIDEO_CAPTURE_INTERRUPTED` 등)에 있습니다.
 - `artifact_id`는 저장·해시 검증이 끝났고 만료되지 않은 파일일 때만 값이 있습니다. 다운로드는 이 id로만 하며, 엔진 파일명은 응답에 나오지 않습니다.
-- `test_export`: 재현된 실행에서만 나옵니다(그 외 `null`). `status`는 `ready` 또는 `failed`(`error_code: "TEST_EXPORT_FAILED"`). `required_environment`는 테스트를 돌릴 때 설정할 환경변수 이름입니다(초기화 모듈 `QA_RESET_MODULE`, 인증이 필요한 경우 `QA_AUTHORIZATION`/`QA_COOKIE`/`QA_STORAGE_STATE` 중 하나). 테스트에는 계정 비밀값이 들어가지 않습니다. 정상 동작을 검사하므로 결함 버전에서는 실패하고 수정 버전에서는 통과해야 합니다.
+- `test_export`: 재현된 실행에서만 나옵니다(그 외 `null`). `status`는 `ready` 또는 `failed`(`error_code: "TEST_EXPORT_FAILED"`). `required_environment`는 테스트를 돌릴 때 설정할 환경변수 이름입니다(초기화 모듈 `QA_RESET_MODULE`, 인증이 필요한 경우 `QA_AUTHORIZATION`/`QA_COOKIE`/`QA_STORAGE_STATE` 중 하나). 테스트에는 계정 비밀값이 들어가지 않습니다. 정상 동작을 검사하므로 결함 버전에서는 실패하고 수정 버전에서는 통과해야 합니다. 이 동작은 `tests/e2e/test_export_check.py`가 실제 엔진·API로 내려받은 테스트를 `npx playwright test`로 돌려 확인합니다(`npm ci --prefix tests/e2e/js` 필요, 없으면 해시·환경변수 검사만 하고 실행 단계는 건너뜀).
 
 ## `GET /evidence/{artifact_id}/download`의 `Range`
 

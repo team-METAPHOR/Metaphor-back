@@ -1,0 +1,6 @@
+{
+  "name": "metaphor-export-check",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "@playwright/test": "1.64.1" }
+}

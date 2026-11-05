@@ -113,7 +113,7 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
 | 필드 | 의미 | SDK 동작 |
 |---|---|---|
 | `widget_enabled` | 관리자가 위젯을 켰는지 | `false`면 위젯을 표시하지 않음 |
-| `reporting_enabled` | `widget_enabled && public_reporting_enabled` | `false`면 신고 버튼을 숨김 |
+| `reporting_enabled` | `widget_enabled && public_reporting_enabled` && 승인 원점 소유 확인 완료 | `false`면 신고 버튼을 숨김 |
 | `screenshot_allowed` | 이 Origin에서 스크린샷을 받을지 | `false`면 스크린샷 UI 숨김 |
 | `auto_detect.*` | 자동 오류 감지 허용 여부(현재 네 값은 항상 같음) | `false`면 오류 자동 신고를 하지 않음 |
 | `limits` | 스크린샷 바이트, 설명 글자 수, 마스킹 박스 개수 상한 | 제출 전에 클라이언트에서 미리 검사 |
@@ -271,7 +271,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 8. 위젯·신고 꺼짐 403 `WIDGET_REPORTING_DISABLED`, 자동 감지 꺼짐 403 `AUTO_DETECT_DISABLED`
 9. 원점 일치 422 `PAGE_URL_ORIGIN_MISMATCH` → 운영 스크린샷 403 `LIVE_SCREENSHOT_DISABLED` → 범위 422 `SCOPE_VIOLATION`
 10. 같은 `Idempotency-Key` 재전송이면 처음 응답 반환(다른 내용이면 409, 키 형식 오류는 400)
-11. 시간당 한도 429 → 중복 병합 200 → 프로그램 상태·AI 허용 422 → 스크린샷·설명 둘 다 없음 422 → 일일 한도 429 → 201
+11. 시간당 한도 429 → 중복 병합 200 → 프로그램 상태·AI 허용 422 → 스크린샷·설명 둘 다 없음 422 → 일일 한도 429 → 도메인 소유 미확인 422 → 201
 
 ## 5. 오류 코드
 
@@ -297,6 +297,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 | 422 | `SCOPE_VIOLATION` | 재현 주소가 승인된 테스트 범위 밖. `error.detail.reason`에 이유(`PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `STATE_CHANGING_PATH`, `INVALID_URL`, `AMBIGUOUS_PATH` 등) | 이 페이지에서는 신고 불가 안내. 재시도하지 않음 |
 | 422 | `PROGRAM_NOT_ACTIVE` | 프로그램이 일시중지·종료 상태 | 신고 버튼 숨김 |
 | 422 | `EXTERNAL_AI_NOT_ALLOWED` | 고객사가 AI 분석을 허용하지 않음 | 신고 버튼 숨김 |
+| 422 | `ORIGIN_NOT_VERIFIED` | 고객사가 테스트 대상 도메인의 소유 확인을 아직 마치지 않음 | 신고 버튼 숨김(`config.reporting_enabled`가 `false`) |
 | 429 | `WIDGET_IP_RATE_LIMITED` | 같은 IP에서 이 프로젝트로 1시간에 10건 초과 | 7절대로 대기. 사용자에게 "잠시 후 다시" 안내 |
 | 429 | `WIDGET_PROJECT_RATE_LIMITED` | 이 프로젝트 전체가 1시간에 100건 초과 | 7절대로 대기 |
 | 429 | `DAILY_LIMIT_EXCEEDED` | 프로그램의 오늘(UTC) 검증 실행 한도 초과 | 오늘은 재시도하지 않음 |

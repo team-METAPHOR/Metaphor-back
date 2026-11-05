@@ -1,7 +1,8 @@
-from sqlalchemy import select
+from sqlalchemy import exists, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Membership, Organization, Program, ProgramScopeRevision
+from app.models import Membership, Organization, OriginVerification, Program, ProgramScopeRevision
 
 
 async def add(db: AsyncSession, *rows) -> None:
@@ -47,3 +48,35 @@ async def list_visible(
     )
     # ponytail: unpaginated; add cursor paging when a user sees hundreds of programs.
     return [tuple(row) for row in await db.execute(query)]
+
+
+async def ensure_verification(
+    db: AsyncSession, program_id: str, origin: str, token: str, *, for_update: bool = False
+) -> OriginVerification:
+    """Get the (program, origin) verification row, inserting it with `token` if missing.
+
+    ON CONFLICT keeps concurrent first reads from failing; the first token wins.
+    """
+    await db.execute(
+        insert(OriginVerification)
+        .values(program_id=program_id, origin=origin, token=token)
+        .on_conflict_do_nothing()
+    )
+    query = select(OriginVerification).where(
+        OriginVerification.program_id == program_id, OriginVerification.origin == origin
+    )
+    if for_update:
+        query = query.with_for_update()
+    return await db.scalar(query.execution_options(populate_existing=True))
+
+
+async def is_origin_verified(db: AsyncSession, program_id: str, origin: str) -> bool:
+    return await db.scalar(
+        select(
+            exists().where(
+                OriginVerification.program_id == program_id,
+                OriginVerification.origin == origin,
+                OriginVerification.verified_at.is_not(None),
+            )
+        )
+    )

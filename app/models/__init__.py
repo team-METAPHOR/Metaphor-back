@@ -11,7 +11,7 @@ from app.models.identity import (
     Session,
     User,
 )
-from app.models.program import Program, ProgramScopeRevision
+from app.models.program import OriginVerification, Program, ProgramScopeRevision
 from app.models.report import Clarification, Report
 from app.models.validation_job import JobEvent, ModelUsage, QaResult, ValidationJob
 from app.models.widget import ProgramWidgetSettings
@@ -27,6 +27,7 @@ __all__ = [
     "ModelUsage",
     "OrgInvite",
     "Organization",
+    "OriginVerification",
     "PlatformOperator",
     "Program",
     "ProgramScopeRevision",

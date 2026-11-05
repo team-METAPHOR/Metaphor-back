@@ -106,8 +106,9 @@ async def request_job(
 AUTO_FRESH_ACTION = "job.auto_fresh"
 # Sources an automatic fresh may follow. A customer-requested fresh is never auto-retried.
 AUTO_FRESH_SOURCE_KINDS = ("initial", "resume")
-# create_job refusals that mean "not now": active job, scrubbed report, daily limit.
-AUTO_FRESH_SKIP_STATUSES = (409, 410, 429)
+# create_job refusals that mean "not now": active job, scrubbed report, unverified origin
+# (scope moved to a new origin since the run), daily limit.
+AUTO_FRESH_SKIP_STATUSES = (409, 410, 422, 429)
 NOTE_HEADER = "[이전 재현 시도] 아래 계획은 결론을 내지 못했습니다. 다른 해석·경로로 시도하세요."
 NOTE_MAX_STEPS = 20
 NOTE_MAX_TARGET = 200
@@ -156,7 +157,8 @@ async def auto_fresh(session: AsyncSession, job_id: str) -> str | None:
     Returns None (nothing created) unless the job is inconclusive, is an initial/resume job or
     itself an automatic fresh, is still the report's latest job, and the report has fewer
     automatic fresh jobs than `program.auto_fresh_retries`. Limits enforced by `create_job`
-    (409 active job, 410 scrubbed report, 429 daily limit) also skip silently.
+    (409 active job, 410 scrubbed report, 422 unverified origin, 429 daily limit) also skip
+    silently.
     Automatic jobs are counted by their `job.auto_fresh` audit rows (target = new job id).
     """
     try:

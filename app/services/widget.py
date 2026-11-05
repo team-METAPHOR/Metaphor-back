@@ -27,6 +27,7 @@ from app.services.intake import (
     prepare_screenshot,
 )
 from app.services.limits import enforce_rate_limit, since
+from app.services.origin_verification import origin_of
 from app.services.reports import TEXT_LIMITS, create_report
 from app.services.widget_settings import normalize_origin, origin_kind
 
@@ -83,12 +84,16 @@ async def check_origin(db: AsyncSession, project_key: str, origin: str | None) -
 
 async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> dict:
     async with db.begin():
-        _, row, revision = await resolve_widget(db, project_key, origin)
+        program, row, revision = await resolve_widget(db, project_key, origin)
+        # Reports on an unverified origin would be refused by create_job anyway.
+        verified = await programs_repo.is_origin_verified(
+            db, program.id, origin_of(revision.base_url)
+        )
     approved = origin_kind(origin, revision.base_url) == "approved"
     auto = row.auto_detect_enabled
     return {
         "widget_enabled": row.widget_enabled,
-        "reporting_enabled": row.widget_enabled and row.public_reporting_enabled,
+        "reporting_enabled": row.widget_enabled and row.public_reporting_enabled and verified,
         "screenshot_allowed": approved or row.live_screenshot_enabled,
         "auto_detect": {
             "enabled": auto,

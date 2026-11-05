@@ -5,6 +5,7 @@ injectable model so tests can run the real engine offline.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from core_engine import (
@@ -29,6 +31,8 @@ from core_engine import (
     QAService,
     RunPolicy,
     Screenshot,
+    StateReset,
+    canonical_url,
 )
 from core_engine.video import find_encoder
 from psycopg.rows import dict_row
@@ -41,7 +45,7 @@ from app.worker import conditions as matrix
 from app.worker import live, queue
 from app.worker.main import sync_database_url
 from app.worker.persist import persist_result, sync_events
-from app.worker.resets import RESETS
+from app.worker.resets import RESETS, STATEFUL, ResetConfigError
 
 logger = logging.getLogger(__name__)
 MONITOR_INTERVAL = 1.0
@@ -78,6 +82,42 @@ class BoundJobStore(JobStore):
 
 def context_lock_key(org_id: str, test_context_id: str) -> str:
     return f"test-context:{org_id}:{test_context_id}"
+
+
+def reset_lock_key(adapter_id: str, base_url: str, login_id: str) -> str:
+    """One stateful reset target account at a time, across programs, orgs and contexts: two
+    jobs resetting the same account would wipe each other's data mid-run."""
+    digest = hashlib.sha256(login_id.strip().lower().encode()).hexdigest()
+    return f"reset-account:{adapter_id}:{reset_origin(base_url)}:{digest}"
+
+
+def reset_origin(base_url: str) -> str:
+    """Normalized origin (scheme, host, non-default port): one key per real server."""
+    parts = urlsplit(canonical_url(base_url))
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def stateful_adapters(snapshot: dict) -> list[str]:
+    """Stateful reset adapters any run of this job uses (program or condition), approved writes
+    or not: each one resets a shared account and must not overlap another job's run."""
+    runs = [snapshot, *(snapshot.get("conditions") or [])]
+    return sorted({r["reset_adapter"] for r in runs if r["reset_adapter"] in STATEFUL})
+
+
+def check_state_changes(snapshot: dict) -> str | None:
+    """The approved reset adapter id, or None for a read-only job. Approved writes need every
+    run (and every condition) on the same real reset adapter and no operator session (the reset
+    ends the account's sessions; writes sign in with the saved test account)."""
+    approval = snapshot.get("state_changes")
+    if not approval:
+        return None
+    adapter = approval["reset_adapter_id"]
+    runs = snapshot.get("conditions") or [snapshot]
+    if adapter not in STATEFUL or any(r["reset_adapter"] != adapter for r in [snapshot, *runs]):
+        raise JobInputError("STATE_RESET_REQUIRED")
+    if any(r.get("session_secret_ref") for r in [snapshot, *runs]):
+        raise JobInputError("STATE_CHANGES_SESSION_CONFLICT")
+    return adapter
 
 
 _SECRET_REF = re.compile(r"[A-Za-z0-9_]{1,64}")
@@ -404,9 +444,9 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         if not source or not all((root / source / name).is_file() for name in needed):
             # e.g. a worker without the shared volume, or files removed by retention.
             raise JobInputError("BASELINE_ARTIFACTS_MISSING")
+    approved_adapter = check_state_changes(snapshot)
     if reviewer is _FROM_ENV:
         reviewer = build_reviewer()
-    reset = RESETS[snapshot["reset_adapter"]](snapshot)
     monitor = Monitor(job_id, program["id"], job["scope_revision"])
 
     def bind(engine_job_id: str) -> None:
@@ -447,6 +487,25 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
     if uses_credentials and not credentials.is_https(snapshot["base_url"]):
         # Same rule as the API and the engine; never downgrade or retry over HTTP.
         raise JobInputError(credentials.CODE)
+    stateful = stateful_adapters(snapshot)
+    if stateful and login is None:
+        # A per-account server reset needs the saved test account even if no run signs in.
+        from app.worker.test_accounts import load_login
+
+        login = load_login(conn, program["id"])
+    login_id = login.login_id if login is not None else None
+    try:
+        if conditions:
+            reset = matrix.condition_reset(snapshot, RESETS, login_id)
+        else:
+            reset = RESETS[snapshot["reset_adapter"]](snapshot, login_id)
+    except ResetConfigError as error:
+        raise JobInputError(error.code) from None
+    locks = [reset_lock_key(a, snapshot["base_url"], login_id or "") for a in stateful]
+    if approved_adapter:
+        # Engine 0.6.0 sends approved writes only with a StateReset of the approved id.
+        # Plain callbacks stay plain: a read-only job behaves exactly as before.
+        reset = StateReset(approved_adapter, reset)
     if conditions:
         service = ConditionsService(
             model,
@@ -459,11 +518,13 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
             limits=ConditionLimits(max_conditions=snapshot["max_conditions"]),
             browser_limits=BROWSER_LIMITS,
         )
-        reset = matrix.condition_reset(snapshot, RESETS)
         contexts = sorted({c["test_context_id"] for c in conditions})
     else:
         service = build_service(snapshot, store, model, job["app_version"], reviewer, login)
         contexts = [snapshot["test_context_id"]]
+    locks = sorted(
+        {*locks, *(context_lock_key(snapshot["org_id"], context) for context in contexts)}
+    )
 
     # Started before the context lock, so a viewer of a waiting job sees the relay alive.
     # Its failures stay inside the relay thread: they never reach the engine or this job.
@@ -474,11 +535,8 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         # every context it may use, taken in sorted order so two matrix jobs can't deadlock.
         # ponytail: per-context serialization; split data spaces if throughput matters.
         with psycopg.connect(sync_database_url(), autocommit=True) as lock_conn:
-            for context in contexts:
-                lock_conn.execute(
-                    "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
-                    (context_lock_key(snapshot["org_id"], context),),
-                )
+            for key in locks:
+                lock_conn.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,))
             monitor.refresh(conn)
             monitor.start()
             try:

@@ -51,10 +51,10 @@ def build_conditions(snapshot: dict, app_version: str | None, load_headers, logi
     )
 
 
-def condition_reset(snapshot: dict, resets: dict):
+def condition_reset(snapshot: dict, resets: dict, login_id: str | None = None):
     """Engine `reset(condition_id, ordinal)` dispatching to each condition's own adapter."""
     adapters = {
-        c["condition_id"]: resets[c["reset_adapter"]]({**snapshot, **c})
+        c["condition_id"]: resets[c["reset_adapter"]]({**snapshot, **c}, login_id)
         for c in snapshot["conditions"]
     }
 

@@ -4,7 +4,7 @@ The API seals the credential with the worker's public key (app/core/test_account
 and keeps only a masked login id for display; it can never decrypt what it stored.
 """
 
-from core_engine import PolicyError
+from core_engine import PolicyError, canonical_url
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,6 +123,17 @@ async def put_account(
         for path in (body.login_path, body.submit_path, body.success_path):
             if path is not None:
                 _check_login_path(revision, path)
+        for path in body.unauthenticated_paths:
+            # Matched exactly by the engine, so it must already be in canonical form.
+            try:
+                canonical = canonical_url("https://scope.invalid" + path)
+            except PolicyError:
+                canonical = None
+            if canonical != "https://scope.invalid" + path:
+                raise ApiError(
+                    422, "LOGIN_CONFIG_INVALID", "로그인 상태 확인 경로 형식이 올바르지 않습니다."
+                )
+            _check_login_path(revision, path)
         if body.success_path is not None and body.success_path == body.login_path:
             raise ApiError(
                 422, "LOGIN_CONFIG_INVALID", "로그인 성공 경로는 로그인 경로와 달라야 합니다."
@@ -146,6 +157,7 @@ async def put_account(
             "submit_path": body.submit_path,
             "success_path": body.success_path,
             "success_selector": body.success_selector,
+            "unauthenticated_paths": list(dict.fromkeys(body.unauthenticated_paths)),
             "updated_by": user_id,
         }
         if row is None:

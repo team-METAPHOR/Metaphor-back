@@ -179,17 +179,39 @@ METAPHOR_API_URL=https://api.13-197-7-82.sslip.io
 임의로 보호 정책을 해제하지 않는다.
 소유 확인 경로는 dev에서도 지원하지만 SDK는 production에서만 활성화한다.
 
-### BugLab 익명 세션 확인의 401 제약
+### BugLab 로그인과 서버 초기화 (엔진 0.6.0)
 
-BugLab은 첫 화면에서 `/api/auth/me`를 호출하며 비로그인 상태에는 정상적으로 401을
-반환한다. 엔진 0.4.1은 discovery에서 이 응답을 `HTTP_ERROR`로 처리하므로 익명 실행이
-계획 생성 전에 중단될 수 있다. 401을 숨기거나 대상 주소 보호 정책을 끄지 않는다.
-팀 데모는 기존 합성 계정 `qa1`의 운영자 세션을 worker의 `QA_SESSION_<ORG>_<REF>`에
-보관하고, HTTPS dev 범위의 새 리비전에 해당 참조와 비익명 테스트 문맥을 연결한다.
-이전 범위와 실패 기록은 보존한다. 세션 원문은 모델·API 설정·DB 범위에 넣지 않는다.
-소비자용 API는 이 참조를 설정할 수 없으므로 운영자가 승인 범위를 검증하고 바인딩해야 한다.
-세션 만료·dev reset 후에는 운영자가 다시 준비해야 한다. 로그인 폼 실행도 같은 첫 401의
-영향을 받을 수 있으므로 저장 계정 키 설정만으로 이 제약이 해결됐다고 간주하지 않는다.
+엔진 0.6.0은 일반 화면의 비로그인 `/api/auth/me` 401을 관찰 기록(`non_fatal`)으로 남기고 계속한다.
+데모 로그인은 대시보드 테스트 계정(설정 > 재현 환경 > + 계정 추가)으로 하고, 로그인 준비 중 401 경로는
+계정의 `unauthenticated_paths: ["/api/auth/me"]`로 등록한다(현재 화면에 입력란이 없으면 `PUT /programs/{id}/test-account`로 저장).
+장바구니 쓰기 승인과 `buglab-v1` 초기화는 [승인된 테스트 쓰기](./api/state-changes.md)를 따른다.
+워커에 `QA_RESET_BUGLAB_TOKEN`, `QA_RESET_BUGLAB_ORIGINS`(dev HTTPS 원점), `QA_RESET_BUGLAB_ACCOUNTS`(예: `qa1@buglab.test,qa2@buglab.test`)를 두고 재시작한다.
+
+운영자 세션(`QA_SESSION_<ORG>_<REF>`)은 엔진이 처리하지 못하는 로그인(MFA·CAPTCHA·SSO)의 대안일 뿐이다.
+초기화가 계정 세션을 지우므로 초기화 어댑터·쓰기 승인과 함께 쓰지 않는다(API·워커 모두 `STATE_CHANGES_SESSION_CONFLICT`).
+기존 리비전에 연결된 세션 참조는 고객 API로 지울 수 없으므로 운영자가 새 리비전으로 해제한다.
+(`psql -v program_id=<프로그램 id> -f unbind.sql`)
+
+```sql
+BEGIN;
+SELECT current_revision FROM programs WHERE id = :'program_id' FOR UPDATE;
+INSERT INTO program_scope_revisions
+  (program_id, revision, base_url, allowed_path_prefixes, excluded_path_prefixes, width, height,
+   app_version, approved_app_versions, test_context_id, mask_selectors, session_secret_ref,
+   reset_adapter, allow_private_targets, private_cidrs, state_changes, created_by)
+SELECT r.program_id, r.revision + 1, r.base_url, r.allowed_path_prefixes, r.excluded_path_prefixes,
+       r.width, r.height, r.app_version, r.approved_app_versions, r.test_context_id,
+       r.mask_selectors, NULL, r.reset_adapter, r.allow_private_targets, r.private_cidrs,
+       r.state_changes, NULL
+FROM program_scope_revisions r JOIN programs p
+  ON p.id = r.program_id AND r.revision = p.current_revision
+WHERE p.id = :'program_id';
+UPDATE programs SET current_revision = current_revision + 1 WHERE id = :'program_id';
+COMMIT;
+```
+
+이전 리비전과 실행 기록은 그대로 남는다. 이후 워커 환경에서 해당 `QA_SESSION_*` 값을 지우고 재시작한다.
+실행 중인 작업은 리비전이 바뀌면 권한 확인에서 중단되므로 큐가 빈 때 적용한다.
 
 ## 6. 실제 검증
 

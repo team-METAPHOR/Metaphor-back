@@ -149,6 +149,7 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
   "widget_enabled": true,
   "reporting_enabled": true,
   "screenshot_allowed": true,
+  "activity_allowed": true,
   "auto_detect": {"enabled": true, "js_error": true, "unhandled_rejection": true, "http_5xx": true},
   "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20},
   "mask_selectors": [
@@ -163,6 +164,7 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
 | `widget_enabled` | 관리자가 위젯을 켰는지 | `false`면 위젯을 표시하지 않음 |
 | `reporting_enabled` | `widget_enabled && public_reporting_enabled` && 승인 원점 소유 확인 완료 && 사이트 상태 `active` && `external_ai_allowed` | `false`면 신고 버튼을 숨김. 신고 저장(`create_report`)이 거부하는 조건과 같습니다 |
 | `screenshot_allowed` | 이 Origin에서 스크린샷을 받을지 | `false`면 스크린샷 UI 숨김 |
+| `activity_allowed` | 제한된 최근 조작 기록을 지원하는지 | `true`일 때만 메모리 수집 및 별도 전송 동의 UI 표시. 필드가 없으면 비활성 |
 | `auto_detect.*` | 자동 오류 감지 허용 여부(현재 네 값은 항상 같음) | `false`면 오류 자동 신고를 하지 않음 |
 | `limits` | 스크린샷 바이트, 설명 글자 수, 마스킹 박스 개수 상한 | 제출 전에 클라이언트에서 미리 검사 |
 | `mask_selectors` | 스크린샷에서 가려야 할 요소의 CSS 선택자 목록 | 캡처 전에 일치하는 요소를 검게 칠함([스크린샷 마스킹](#스크린샷-마스킹)) |
@@ -229,7 +231,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
     "viewport": {"width": 1280, "height": 800}          // 선택, 각 1–10000 정수
   },
   "mask_boxes": [[0, 0, 200, 40]],                      // 선택, 최대 20개. screenshot과 함께만
-  "consent": {"environment": true, "screenshot": true}  // 선택, 두 값 모두 기본 false
+  "consent": {"environment": true, "screenshot": true, "activity": false} // 선택, 기본 false
 }
 ```
 
@@ -266,12 +268,49 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 만들지 않고 원래 제보의 중복 횟수만 올립니다. 같은 오류인지는 오류 유형, 숫자를 뺀 메시지,
 `stack_top`, 페이지 경로, HTTP 메서드·경로·상태로 판단합니다. 수동 신고는 병합하지 않습니다.
 
+### 최근 조작 기록 (선택)
+
+설정 응답의 `activity_allowed: true`일 때만 수집합니다. 신고창의 별도 동의
+`consent.activity: true`가 있어야 `activity`를 전송할 수 있습니다. 구버전 설정에서
+필드가 없으면 수집하지 않습니다. 메모리에 최근 120초, 최대 20개만 보관하며 신고창을
+열 때 고정합니다. 전체 페이지를 새로 열면 기록은 사라집니다.
+
+```json
+{"version":1,"truncated":false,"events":[
+  {"kind":"navigation","path":"/products/2","age_ms":2000},
+  {"kind":"click","path":"/products/2","age_ms":1000,
+   "selector":"[data-testid=\"add-to-cart\"]","label":"장바구니 담기",
+   "feedback":["장바구니에 담았습니다."]}
+]}
+```
+
+`activity`는 위 객체이며 UTF-8 JSON 최대 8192바이트입니다. 각 이벤트의 `kind`는
+`navigation` 또는 `click`, `path`는 같은 사이트의 절대 경로(쿼리·해시 제외),
+`age_ms`는 신고창을 연 시점 기준 0..120000 정수입니다. 이벤트는 과거부터 최신 순서입니다.
+클릭에만 `selector`(최대 256자), `label`(80자), `feedback`(120자 문자열 최대 2개)을
+허용합니다. selector는 정적 data-testid 또는 태그/nth-of-type 경로만 사용합니다.
+피드백은 클릭 직후 변경된 공개 status/alert/live 안내 문구입니다. 입력값, 키 입력,
+쿠키, 요청·응답 본문은 수집하지 않습니다. 마스킹 대상·인증 화면은 제외합니다.
+허용 범위 밖 경로는 서버에서 버리고 `truncated`를 켭니다.
+
+서버는 정제한 기록을 `client_context.activity`에 저장하고 엔진의 `reporter_activity`에
+전달합니다. 이는 신고 당시 관찰한 단서이며 재현 성공 증거나 실행 권한이 아닙니다.
+링크 클릭 뒤 경로 변경은 클릭의 결과일 수 있으므로 같은 동작을 두 번 실행하지 않습니다.
+기록에 없는 입력이나 이전 세션 상태를 추정하지 않습니다.
+
+이 기능은 `reporter_activity`를 받는 엔진 0.8.1 이상과 SDK 0.2.0(GitHub Release `v0.2.0`)이
+필요하며, 백엔드 API와 워커를 함께 갱신합니다. 기록 저장 열 추가와 새 비밀키는 필요하지 않습니다.
+기존 고정 버전 URL은 원래 번들·SRI로 유지하며, 이 기능을 쓰려는 고정 버전 설치는
+위젯 설정에서 새 0.2.0 설치 코드를 복사해야 합니다. 최신 URL 설치는 캐시 만료 후
+새로고침하면 적용됩니다. 이 기능은 영상 녹화를 켜지 않습니다.
+
 ### 동의(consent) 규칙
 
 | 보내는 것 | 필요한 동의 | 없으면 |
 |---|---|---|
 | `screenshot` 파일 | `consent.screenshot = true` | `422 CONSENT_REQUIRED` |
 | `environment` 객체 | `consent.environment = true` | `422 CONSENT_REQUIRED` |
+| `activity` 객체 | `consent.activity = true` | `422 CONSENT_REQUIRED` |
 
 SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `true`로 보내야 합니다.
 

@@ -12,7 +12,7 @@
 ──────────────────                                   ────────────
 1. 페이지 로드
    GET /api/v1/widget/config?project_key=mpk_...  →  키·Origin 확인 → 위젯 설정
-   ← 200 { reporting_enabled, screenshot_allowed, auto_detect, limits }
+   ← 200 { reporting_enabled, screenshot_allowed, auto_detect, limits, mask_selectors }
 
 2. 사용자가 "버그 신고" 제출 (또는 SDK가 오류 자동 감지)
    POST /api/v1/widget/reports?project_key=mpk_... → 검사 → 제보 저장 → 검증 작업 대기열 등록
@@ -102,7 +102,11 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
   "reporting_enabled": true,
   "screenshot_allowed": true,
   "auto_detect": {"enabled": true, "js_error": true, "unhandled_rejection": true, "http_5xx": true},
-  "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20}
+  "limits": {"max_screenshot_bytes": 4194304, "max_description": 8000, "max_mask_boxes": 20},
+  "mask_selectors": [
+    "[data-private]", "[data-sensitive]", "input[type=password]", "input[type=hidden]", "iframe",
+    "#card-number"
+  ]
 }
 ```
 
@@ -113,6 +117,23 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
 | `screenshot_allowed` | 이 Origin에서 스크린샷을 받을지 | `false`면 스크린샷 UI 숨김 |
 | `auto_detect.*` | 자동 오류 감지 허용 여부(현재 네 값은 항상 같음) | `false`면 오류 자동 신고를 하지 않음 |
 | `limits` | 스크린샷 바이트, 설명 글자 수, 마스킹 박스 개수 상한 | 제출 전에 클라이언트에서 미리 검사 |
+| `mask_selectors` | 스크린샷에서 가려야 할 요소의 CSS 선택자 목록 | 캡처 전에 일치하는 요소를 검게 칠함([스크린샷 마스킹](#스크린샷-마스킹)) |
+
+### 스크린샷 마스킹
+
+`mask_selectors`는 Metaphor 기본 민감 선택자(`[data-private]`, `[data-sensitive]`,
+`input[type=password]`, `input[type=hidden]`, `iframe`) 뒤에 관리자가 테스트 범위에 등록한
+선택자를 이어 붙인 목록입니다. 중복은 빠지고 순서는 유지됩니다. 검증 워커가 브라우저에서 찍는
+스크린샷도 같은 선택자로 가려지므로, 운영 사이트 화면도 같은 기준으로 맞춥니다.
+
+SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live_screenshot_enabled`가 켜진 경우)는
+반드시 아래를 지키세요.
+
+- 캡처하기 **전에** 클라이언트에서 `mask_selectors`와 일치하는 모든 요소의 영역을 검은색으로 칠합니다.
+- 모든 `input`·`textarea`의 입력 값도 가립니다(값을 지우거나 영역을 칠함). 선택자에 없는 칸도 포함합니다.
+- 서버로는 **마스킹된 이미지만** 업로드합니다. 원본 캡처는 메모리에서 버리고, 저장하거나 전송하지 마세요.
+- 사용자가 그린 `mask_boxes`는 이 자동 마스킹에 **추가로** 적용됩니다. 대신하지 않습니다.
+- 선택자가 잘못되어 `querySelectorAll`이 예외를 던지면 그 선택자만 건너뛰지 말고 캡처를 중단하세요.
 
 - 응답에는 프로그램 id·이름·테스트 범위·조직 정보가 들어 있지 않습니다.
 - `Cache-Control: public, max-age=60`, `Vary: Origin`. 설정 변경은 최대 60초 뒤에 반영될 수 있습니다.
@@ -316,7 +337,8 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 - `localStorage`, `sessionStorage`, IndexedDB 내용
 - 민감한 쿼리가 담긴 전체 URL. `error.http.path`에는 경로만, `stack_top`에는 스크립트 위치만 넣으세요.
 
-스크린샷을 찍을 때도 입력창·개인 정보 영역은 사용자가 `mask_boxes`로 가릴 수 있게 해 주세요.
+스크린샷을 찍을 때는 `config.mask_selectors`와 입력창 값을 먼저 가리고([스크린샷 마스킹](#스크린샷-마스킹)),
+그 밖의 개인 정보 영역은 사용자가 `mask_boxes`로 더 가릴 수 있게 해 주세요.
 
 ## 9. CORS
 

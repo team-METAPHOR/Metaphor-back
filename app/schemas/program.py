@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +19,11 @@ SCOPE_FIELDS = (
     "mask_selectors",
     "reset_adapter",
 )
+
+# Same limits as the engine's BrowserOptions (core_engine/observation.py): at most 30
+# selectors, each 1..256 chars. Anything wider would make every worker job fail.
+MAX_MASK_SELECTORS = 30
+MaskSelector = Annotated[str, Field(min_length=1, max_length=256)]
 
 
 class _Strict(BaseModel):
@@ -43,7 +48,7 @@ class ProgramCreate(_Strict):
     app_version: str = "unspecified"
     approved_app_versions: list[str] = Field(default=[], max_length=50)  # checked per item
     test_context_id: str = "anonymous"
-    mask_selectors: list[str] = Field(default=[], max_length=100)
+    mask_selectors: list[MaskSelector] = Field(default=[], max_length=MAX_MASK_SELECTORS)
     reset_adapter: str = Field(default="stateless", max_length=64)
 
 
@@ -60,7 +65,7 @@ class ProgramPatch(_Strict):
     app_version: str | None = None
     approved_app_versions: list[str] | None = Field(default=None, max_length=50)
     test_context_id: str | None = None
-    mask_selectors: list[str] | None = Field(default=None, max_length=100)
+    mask_selectors: list[MaskSelector] | None = Field(default=None, max_length=MAX_MASK_SELECTORS)
     reset_adapter: str | None = Field(default=None, max_length=64)
 
 

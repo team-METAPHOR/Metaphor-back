@@ -38,6 +38,16 @@ SDK_HEADER = "\n\n[SDK 감지 정보]\n"
 IP_HOURLY_LIMIT = 10
 PROJECT_HOURLY_LIMIT = 100
 DEDUP_WINDOW = {"hours": 24}
+# Mirrors the engine's built-in sensitive selectors (core_engine/observation.py, the
+# `sensitive` list in its screenshot masking). Kept here so the API never reads engine
+# internals; update both together when the engine pin moves.
+BUILTIN_MASK_SELECTORS = (
+    "[data-private]",
+    "[data-sensitive]",
+    "input[type=password]",
+    "input[type=hidden]",
+    "iframe",
+)
 
 
 def config_limits() -> dict:
@@ -83,6 +93,8 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
             "http_5xx": auto,
         },
         "limits": config_limits(),
+        # Elements the SDK must black out before capturing a screenshot.
+        "mask_selectors": list(dict.fromkeys([*BUILTIN_MASK_SELECTORS, *revision.mask_selectors])),
     }
 
 

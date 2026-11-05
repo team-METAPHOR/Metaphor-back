@@ -17,7 +17,7 @@ from threading import Event
 import psycopg
 
 from app.core.config import get_settings
-from app.worker import live, queue
+from app.worker import live, provider_backoff, queue
 
 logger = logging.getLogger(__name__)
 KILL_GRACE_SECONDS = 3
@@ -103,7 +103,12 @@ def run_forever(
                 live.sweep(conn)
             except psycopg.Error as error:
                 logger.warning("LIVE_RELAY_SWEEP_FAILED: %s", type(error).__name__)
-            job_id = queue.claim_next(conn, worker_id, lease_seconds=settings.lease_seconds)
+            job_id = queue.claim_next(
+                conn,
+                worker_id,
+                lease_seconds=settings.lease_seconds,
+                providers=provider_backoff.worker_providers(),
+            )
             if job_id is None:
                 stop_event.wait(idle_seconds)
                 continue

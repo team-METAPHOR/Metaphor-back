@@ -31,7 +31,7 @@ from app.services.access import READ_ROLES, WRITE_ROLES, org_role, require_org_r
 from app.services.audit import record_audit
 from app.services.diagnosis import model_id
 from app.services.reports import load_visible_report
-from app.services.rerun import AUTO_FRESH_ACTION
+from app.services.rerun import AUTO_FRESH_ACTION, PROVIDER_RETRY_ACTION
 
 
 def _slot_taken() -> ApiError:
@@ -280,7 +280,9 @@ async def build_records(
     bounds = await repo.event_bounds(db, job_ids, ENGINE_TERMINAL)
     parts = await repo.result_parts(db, job_ids)
     with_md = await repo.jobs_with_report_md(db, job_ids)
-    automatic = await repo.automatic_job_ids(db, job_ids, AUTO_FRESH_ACTION)
+    automatic = await repo.automatic_job_ids(
+        db, job_ids, {AUTO_FRESH_ACTION: "auto_fresh", PROVIDER_RETRY_ACTION: "provider_retry"}
+    )
     usage = await repo.model_usage_for(db, job_ids)
     conditions: dict[str, list[EvalCondition]] = {}
     for row in await repo.conditions_for(db, job_ids):
@@ -309,6 +311,8 @@ async def build_records(
                 kind=job.kind,
                 status=job.status,
                 automatic=job.id in automatic,
+                automatic_reason=automatic.get(job.id),
+                run_after=job.run_after,
                 parent_job_id=job.parent_job_id,
                 baseline_job_id=job.baseline_job_id,
                 claims=job.attempts,

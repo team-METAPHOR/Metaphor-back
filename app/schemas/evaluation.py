@@ -95,7 +95,10 @@ class EvalJob(BaseModel):
     id: str
     kind: str
     status: str
-    automatic: bool  # automatic fresh after an inconclusive run
+    automatic: bool  # created by the system, not a person
+    # "auto_fresh" (after an inconclusive run) / "provider_retry" (after a provider 429)
+    automatic_reason: Literal["auto_fresh", "provider_retry"] | None = None
+    run_after: datetime | None = None  # provider retry: not claimed before this time
     parent_job_id: str | None
     baseline_job_id: str | None
     claims: int  # worker claims (validation_jobs.attempts)

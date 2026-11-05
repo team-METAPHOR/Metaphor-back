@@ -20,6 +20,7 @@ from app.models.test_condition import ProgramTestCondition
 from app.models.validation_job import (
     JobEvent,
     ModelUsage,
+    ProviderBackoff,
     QaResult,
     ValidationJob,
     ValidationJobCondition,
@@ -37,6 +38,7 @@ __all__ = [
     "LiveTicket",
     "Membership",
     "ModelUsage",
+    "ProviderBackoff",
     "OrgInvite",
     "Organization",
     "OriginVerification",

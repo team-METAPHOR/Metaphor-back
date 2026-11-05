@@ -189,6 +189,7 @@
 - 공급자가 429와 숫자 `Retry-After`를 주면 엔진이 `report.model_calls[].retry_after_seconds`로 기록합니다(엔진은 스스로 재시도하지 않음). 작업 응답(`GET /validation-jobs/{id}`, 작업 목록)에 `retry_after_seconds`와 `retry_available_at`(= `finished_at` + 대기 초, UTC)이 나옵니다. `MODEL_RATE_LIMITED`가 아니거나 힌트가 없으면 둘 다 `null`입니다.
 - 24시간(86400초)을 넘거나 음수인 힌트는 무시합니다.
 - 최신 작업이 이 대기 시간 안이면 `POST /reports/{id}/validation-jobs`(`fresh`/`retest`)는 `429 PROVIDER_RATE_LIMITED`와 `Retry-After`(남은 초, 올림) 헤더, `error.detail.retry_available_at`을 돌려줍니다. 이때는 사용자별 요청 한도를 쓰지 않습니다. 시간이 지나면 정상 접수됩니다.
+- 워커는 429 뒤 그 공급자를 `Retry-After` 동안 멈추고, 상한 안에서 지연된 자동 재시도(`fresh`, `run_after`) 1건을 큐에 넣을 수 있습니다([공급자 429 정책](./evaluation.md#공급자-429-정책-워커)). 그 작업이 대기 중이면 새 요청은 `409 ACTIVE_JOB_EXISTS`입니다.
 - 공급자 오류로 끝난 작업은 자동 재생성(`auto_fresh`)을 하지 않습니다. 공급자 오류 본문과 키는 저장·응답하지 않습니다.
 
 `best_attempt` — 끝난 최신 작업의 저장된 엔진 결과(`qa_results`)가 있을 때만 객체이고, 없으면(작업 없음·진행 중·보존 기간 삭제) `null`입니다.

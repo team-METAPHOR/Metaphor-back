@@ -42,7 +42,7 @@ from app.integrations import storage
 from app.integrations.state_changes import state_change_policy
 from app.models.test_account import login_applies
 from app.worker import conditions as matrix
-from app.worker import live, queue, readiness
+from app.worker import live, provider_backoff, queue, readiness
 from app.worker.main import sync_database_url
 from app.worker.persist import persist_result, sync_events
 from app.worker.resets import RESETS, STATEFUL, ResetConfigError
@@ -572,8 +572,52 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         retention_days=program["retention_days"],
         child_dirs=tuple(root / child for child in matrix.child_ids(conn, job_id)),
     )
+    if persisted:
+        _after_rate_limit(conn, job_id, result.report or {})
     if persisted and result.status == "inconclusive" and not conditions:
         _run_auto_fresh(job_id)
+
+
+def _after_rate_limit(conn: psycopg.Connection, job_id: str, report: dict) -> None:
+    """Provider 429 in this result: pause that provider's claims and maybe queue one delayed
+    retry (app/worker/provider_backoff.py). Never affects the finished job's result."""
+    delays = provider_backoff.rate_limits(report)
+    if not delays:
+        return
+    for provider, delay in delays.items():
+        provider_backoff.pause(conn, provider, delay)
+    provider, delay = max(delays.items(), key=lambda item: item[1])
+    policy = provider_backoff.retry_policy()
+    try:
+        retry_id = asyncio.run(_provider_retry(job_id, provider, delay, policy))
+    except Exception as error:
+        logger.warning("provider retry skipped for job %s: %s", job_id, type(error).__name__)
+        return
+    if retry_id:
+        logger.info("provider retry job %s queued after %s (%s)", retry_id, job_id, provider)
+
+
+async def _provider_retry(job_id: str, provider: str, delay: float, policy) -> str | None:
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import get_settings
+    from app.services import rerun
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            return await rerun.provider_retry(
+                session,
+                job_id,
+                provider=provider,
+                delay_seconds=delay,
+                max_retries=policy.max_retries,
+                deadline_seconds=policy.deadline_seconds,
+                max_wait_seconds=policy.max_wait_seconds,
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _auto_fresh(job_id: str) -> str | None:

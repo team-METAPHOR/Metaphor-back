@@ -29,6 +29,8 @@ class JobOut(BaseModel):
     # MODEL_RATE_LIMITED only: the provider's Retry-After and the time a rerun is accepted.
     retry_after_seconds: float | None = None
     retry_available_at: datetime | None = None
+    # Queued automatic retry after a provider 429: not started before this time.
+    run_after: datetime | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

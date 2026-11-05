@@ -3,6 +3,7 @@ automatic `fresh` that regenerates the scenario after an inconclusive result."""
 
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 from sqlalchemy import exists, func, select
@@ -266,6 +267,86 @@ async def auto_fresh(session: AsyncSession, job_id: str) -> str | None:
                 detail={"report_id": report.id, "source_job_id": job.id},
             )
             return fresh.id
+    except ApiError as error:
+        if error.status in AUTO_FRESH_SKIP_STATUSES:
+            return None
+        raise
+
+
+PROVIDER_RETRY_ACTION = "job.provider_retry"
+# Rate-limited sources the automatic provider retry may follow (as a new `fresh` job).
+# Resume needs the answered parent and retest is a person's fix check: neither is automatic.
+PROVIDER_RETRY_SOURCE_KINDS = ("initial", "fresh")
+RATE_LIMITED_STATUSES = ("failed", "inconclusive")
+
+
+async def provider_retry(
+    session: AsyncSession,
+    job_id: str,
+    *,
+    provider: str,
+    delay_seconds: float,
+    max_retries: int,
+    deadline_seconds: int,
+    max_wait_seconds: int,
+) -> str | None:
+    """Queue one `fresh` job, due after the provider's Retry-After, for a job the provider
+    rate-limited; return its id. None (nothing created) unless: the job failed/was inconclusive
+    with MODEL_RATE_LIMITED, is an initial/fresh job and still the report's latest, the program
+    still runs AI, the wait is at most `max_wait_seconds`, the chain (`audit detail.attempt`) has
+    fewer than `max_retries` retries and the retry is due within `deadline_seconds` of the
+    chain's first job. Same `create_job` refusals as `auto_fresh` also skip silently."""
+    if max_retries <= 0 or delay_seconds > max_wait_seconds:
+        return None
+    try:
+        async with session.begin():
+            job = await session.get(ValidationJob, job_id)
+            if job is None or job.status not in RATE_LIMITED_STATUSES:
+                return None
+            if job.error_code != "MODEL_RATE_LIMITED" or job.has_conditions:
+                return None
+            if job.kind not in PROVIDER_RETRY_SOURCE_KINDS:
+                return None
+            report = await session.get(Report, job.report_id)
+            program = await session.get(Program, report.program_id)
+            if report.latest_job_id != job.id:
+                return None
+            if program.status != "active" or not program.external_ai_allowed:
+                return None
+            previous = await session.scalar(
+                select(AuditEvent).where(
+                    AuditEvent.action == PROVIDER_RETRY_ACTION, AuditEvent.target == job.id
+                )
+            )
+            attempt = (previous.detail.get("attempt", 0) if previous else 0) + 1
+            chain_started = (
+                datetime.fromisoformat(previous.detail["chain_started_at"])
+                if previous
+                else job.created_at
+            )
+            if attempt > max_retries:
+                return None
+            due = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+            if due > chain_started + timedelta(seconds=deadline_seconds):
+                return None
+            retry = await create_job(session, report, "fresh", parent=job)
+            retry.run_after = due
+            await record_audit(
+                session,
+                actor_id=None,
+                org_id=report.org_id,
+                action=PROVIDER_RETRY_ACTION,
+                target=retry.id,
+                detail={
+                    "report_id": report.id,
+                    "source_job_id": job.id,
+                    "provider": provider,
+                    "attempt": attempt,
+                    "delay_seconds": delay_seconds,
+                    "chain_started_at": chain_started.isoformat(),
+                },
+            )
+            return retry.id
     except ApiError as error:
         if error.status in AUTO_FRESH_SKIP_STATUSES:
             return None

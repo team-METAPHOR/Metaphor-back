@@ -335,3 +335,17 @@ async def test_load_login_builds_engine_options(client, db_session, conn, keypai
         "/app/home",
     )
     assert PASSWORD not in repr(login)
+
+
+async def test_moving_base_url_drops_test_account(client, db_session):
+    """Credentials are bound to their site: a new origin must never receive them."""
+    world = await seeded(client, db_session)
+    assert (await client.put(url(world), json=BODY, headers=world["admin"])).status_code == 200
+    moved = await client.patch(
+        f"/api/v1/programs/{world['program'].id}",
+        json={"base_url": "https://other.example.com"},
+        headers=world["admin"],
+    )
+    assert moved.status_code == 200, moved.text
+    after = await client.get(url(world), headers=world["admin"])
+    assert after.json()["configured"] is False

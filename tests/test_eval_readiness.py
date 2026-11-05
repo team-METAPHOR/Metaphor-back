@@ -43,7 +43,7 @@ async def test_readiness_recorded_without_secrets(db_session, conn, monkeypatch)
     job = await job_row(db_session, job_id)
     ready = job.readiness
     assert ready["schema_version"] == 1
-    assert ready["engine"] == {"package_version": "0.8.6", "commit": ENGINE_COMMIT}
+    assert ready["engine"] == {"package_version": "0.8.7", "commit": ENGINE_COMMIT}
     assert ready["models"]["primary"] == {
         "provider": "Primary",
         "model": "gpt-5.4-mini",

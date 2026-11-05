@@ -20,7 +20,7 @@ class Solution(BaseModel):
 class DeveloperHandoff(BaseModel):
     """Model-generated text, returned as plain data only (never HTML, links not followed)."""
 
-    state: Literal["pending", "ready", "unavailable"]
+    state: Literal["pending", "ready", "unavailable", "expired"]
     job_id: str | None
     verdict: str | None
     summary: str | None

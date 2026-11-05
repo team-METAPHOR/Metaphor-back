@@ -5,6 +5,10 @@
    engine dirs of jobs that died before their result was persisted).
 3. Empty directories older than ORPHAN_AGE (a running engine creates its dir before writing).
 4. Expired idempotency records.
+5. Personal data in rows: `client_ip_hash` after a day (it only feeds the 1-hour widget IP
+   limit), and, past the program's `retention_days`, the report's free text and client metadata
+   plus its jobs' raw results, event details, questions and answers. Report and job rows stay
+   for statistics; `reports.scrubbed_at` marks them. Reports with an active job wait.
 
 Safe to run repeatedly and concurrently with the API/worker: nothing younger than ORPHAN_AGE
 is touched unless its artifact row says it expired.
@@ -18,10 +22,12 @@ from pathlib import Path, PurePosixPath
 import psycopg
 
 from app.integrations import storage
+from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.worker.main import sync_database_url
 
 logger = logging.getLogger(__name__)
 ORPHAN_AGE_SECONDS = 24 * 3600
+SCRUB_BATCH = 500
 
 
 def _inside_root(root: Path, storage_key: str) -> Path | None:
@@ -87,17 +93,89 @@ def _purge_orphans(conn: psycopg.Connection, root: Path, cutoff: float) -> tuple
     return files, dirs
 
 
+def _clear_ip_hashes(conn: psycopg.Connection) -> int:
+    return conn.execute(
+        "UPDATE reports SET client_ip_hash = NULL"
+        " WHERE client_ip_hash IS NOT NULL AND created_at < now() - interval '24 hours'"
+    ).rowcount
+
+
+def _scrub_reports(conn: psycopg.Connection) -> int:
+    """One batch per run; the cron catches up on a backlog over the following runs."""
+    with conn.transaction():
+        ids = [
+            report_id
+            for (report_id,) in conn.execute(
+                """
+                SELECT r.id FROM reports r JOIN programs p ON p.id = r.program_id
+                WHERE r.scrubbed_at IS NULL
+                  AND r.created_at < now() - make_interval(days => p.retention_days)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM validation_jobs j
+                    WHERE j.report_id = r.id AND j.status = ANY(%(active)s)
+                  )
+                ORDER BY r.created_at
+                LIMIT %(limit)s
+                FOR UPDATE OF r SKIP LOCKED
+                """,
+                {"active": list(ACTIVE_JOB_STATUSES), "limit": SCRUB_BATCH},
+            )
+        ]
+        if ids:
+            # Re-check under the row lock: a create_job that committed while we waited for the
+            # snapshot is visible to this new statement (READ COMMITTED).
+            busy = {
+                report_id
+                for (report_id,) in conn.execute(
+                    "SELECT DISTINCT report_id FROM validation_jobs"
+                    " WHERE report_id = ANY(%(ids)s) AND status = ANY(%(active)s)",
+                    {"ids": ids, "active": list(ACTIVE_JOB_STATUSES)},
+                )
+            }
+            ids = [report_id for report_id in ids if report_id not in busy]
+        if not ids:
+            return 0
+        params = {"ids": ids}
+        jobs = "SELECT id FROM validation_jobs WHERE report_id = ANY(%(ids)s)"
+        conn.execute(f"DELETE FROM qa_results WHERE job_id IN ({jobs})", params)
+        conn.execute(
+            f"UPDATE job_events SET detail = '{{}}'::jsonb WHERE job_id IN ({jobs})", params
+        )
+        conn.execute(
+            "UPDATE validation_jobs SET questions = '[]'::jsonb, answers = NULL"
+            " WHERE report_id = ANY(%(ids)s)",
+            params,
+        )
+        conn.execute(
+            "UPDATE clarifications SET answers = '' WHERE report_id = ANY(%(ids)s)", params
+        )
+        conn.execute(
+            """
+            UPDATE reports SET title = '', description = '', expected_result = '',
+                test_data = '', client_context = NULL, client_ip_hash = NULL,
+                scrubbed_at = now(), updated_at = now()
+            WHERE id = ANY(%(ids)s)
+            """,
+            params,
+        )
+    return len(ids)
+
+
 def purge(conn: psycopg.Connection) -> dict[str, int]:
     root = storage.storage_root()
     cutoff = time.time() - ORPHAN_AGE_SECONDS
     artifacts = _purge_expired(conn, root)
     orphans, dirs = _purge_orphans(conn, root, cutoff)
     records = conn.execute("DELETE FROM idempotency_records WHERE expires_at < now()").rowcount
+    ip_hashes = _clear_ip_hashes(conn)
+    scrubbed = _scrub_reports(conn)
     return {
         "artifacts": artifacts,
         "orphans": orphans,
         "dirs": dirs,
         "idempotency_records": records,
+        "reports_scrubbed": scrubbed,
+        "ip_hashes_cleared": ip_hashes,
     }
 
 

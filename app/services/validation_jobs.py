@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.models import Clarification, ValidationJob
+from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
 from app.services.access import org_role
@@ -48,10 +49,16 @@ async def get_job(db: AsyncSession, user_id: str, job_id: str) -> JobOut:
 async def get_result(db: AsyncSession, user_id: str, job_id: str) -> JobResult:
     """Engine result and evidence metadata: customer org members only."""
     async with db.begin():
-        job, _, access = await load_visible_job(db, user_id, job_id)
+        job, report, access = await load_visible_job(db, user_id, job_id)
         if access != "org":
             raise ApiError(403, "FORBIDDEN", "검증 결과는 고객사 구성원만 볼 수 있습니다.")
         result = await jobs_repo.get_result(db, job.id)
+        if (
+            result is None
+            and report.scrubbed_at is not None
+            and job.status not in ACTIVE_JOB_STATUSES
+        ):
+            raise ApiError(410, "RESULT_EXPIRED", "보존 기간이 지나 검증 결과가 삭제되었습니다.")
         if result is None:
             raise ApiError(409, "RESULT_NOT_READY", "아직 검증 결과가 없습니다.")
         return JobResult(job_id=job.id, result=result.raw)

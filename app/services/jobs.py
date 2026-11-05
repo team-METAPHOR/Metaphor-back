@@ -46,7 +46,8 @@ async def create_job(
 ) -> ValidationJob:
     """Queue a job for `report` inside the caller's transaction.
 
-    Raises 429 DAILY_LIMIT_EXCEEDED (per program, UTC day) or 409 ACTIVE_JOB_EXISTS.
+    Raises 410 REPORT_EXPIRED (scrubbed by the retention purge), 429 DAILY_LIMIT_EXCEEDED
+    (per program, UTC day) or 409 ACTIVE_JOB_EXISTS.
     `snapshot` overrides the current revision (retest reuses its baseline's snapshot).
     """
     if kind not in JOB_KINDS:
@@ -56,6 +57,15 @@ async def create_job(
     program = await session.scalar(
         select(Program).where(Program.id == report.program_id).with_for_update()
     )
+    # Report row lock (held to commit, so it also covers the caller's clarification insert) makes
+    # this mutually exclusive with the purge scrub, which locks the same row. Re-read scrubbed_at
+    # under the lock: the caller's Report may predate the scrub.
+    scrubbed_at = await session.scalar(
+        select(Report.scrubbed_at).where(Report.id == report.id).with_for_update()
+    )
+    if scrubbed_at is not None:
+        # Text, raw results and answers are gone; a new run would have nothing to work from.
+        raise ApiError(410, "REPORT_EXPIRED", "보존 기간이 지난 신고는 다시 검증할 수 없습니다.")
     day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     used = await session.scalar(
         select(func.count())

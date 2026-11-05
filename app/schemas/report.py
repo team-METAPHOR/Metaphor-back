@@ -41,6 +41,8 @@ class ReportDetail(ReportItem):
     input_artifact_id: str | None
     # Org members only; None for the reporter view.
     client_context: dict | None = None
+    # True once the retention purge blanked the text fields (they read as "").
+    scrubbed: bool = False
 
 
 class ClarificationCreate(BaseModel):

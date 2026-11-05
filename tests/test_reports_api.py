@@ -1,9 +1,10 @@
 import json
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
-from app.models import QaResult, ValidationJob
+from app.models import QaResult, Report, ValidationJob
 from app.models.validation_job import JobEvent
 from tests.factories import login_as, make_org, make_program
 from tests.test_core_intake import png
@@ -269,3 +270,53 @@ async def test_reporter_view_hides_org_only_fields(client, db_session, world):
         await client.get(f"/api/v1/validation-jobs/{job_id}", headers=world["admin_h"])
     ).json()
     assert org_view["verdict"] == "reproduced"
+
+
+# --- after the retention scrub ---------------------------------------------
+
+
+async def scrub(db_session, report_id, job_id):
+    """What the purge leaves behind: terminal job, no raw result, blank text."""
+    await db_session.execute(
+        update(ValidationJob).where(ValidationJob.id == job_id).values(status="completed")
+    )
+    await db_session.execute(
+        update(Report)
+        .where(Report.id == report_id)
+        .values(title="", description="", client_context=None, scrubbed_at=datetime.now(UTC))
+    )
+    await db_session.commit()
+
+
+async def test_scrubbed_report_detail_and_result_expired(client, db_session, world):
+    report_id, job_id = await make_job(client, world)
+    h = world["admin_h"]
+    fresh = (await client.get(f"/api/v1/reports/{report_id}", headers=h)).json()
+    assert fresh["scrubbed"] is False
+    await scrub(db_session, report_id, job_id)
+    detail = await client.get(f"/api/v1/reports/{report_id}", headers=h)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert (body["scrubbed"], body["description"], body["title"]) == (True, "", "")
+    assert body["latest_job"]["id"] == job_id
+    listed = (await client.get("/api/v1/reports", headers=h)).json()["items"]
+    assert [item["id"] for item in listed] == [report_id]
+    result = await client.get(f"/api/v1/validation-jobs/{job_id}/result", headers=h)
+    assert (result.status_code, result.json()["error"]["code"]) == (410, "RESULT_EXPIRED")
+    # The reporter still gets the org-only 403, not a hint about the result.
+    reporter = await client.get(
+        f"/api/v1/validation-jobs/{job_id}/result", headers=world["reporter_h"]
+    )
+    assert reporter.status_code == 403
+
+
+async def test_scrubbed_report_cannot_be_rerun(client, db_session, world):
+    report_id, job_id = await make_job(client, world)
+    await scrub(db_session, report_id, job_id)
+    response = await client.post(
+        f"/api/v1/reports/{report_id}/validation-jobs",
+        json={"mode": "fresh"},
+        headers=world["admin_h"],
+    )
+    assert (response.status_code, response.json()["error"]["code"]) == (410, "REPORT_EXPIRED")
+    assert await count(db_session, ValidationJob) == 1

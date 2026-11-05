@@ -5,15 +5,16 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.core.config import get_settings
 from app.core.ids import new_id
 from app.integrations import storage
-from app.models import Artifact, IdempotencyRecord
+from app.models import Artifact, Clarification, IdempotencyRecord, QaResult, Report, ValidationJob
+from app.models.validation_job import JobEvent
 from app.worker import purge
 from tests.conftest import TEST_DATABASE_URL
-from tests.factories import make_org, make_program, make_report
+from tests.factories import make_org, make_program, make_report, make_user
 
 OLD = time.time() - 2 * 24 * 3600
 
@@ -170,9 +171,177 @@ async def test_purge_is_idempotent(db_session, report):
     await add_artifact(db_session, report, path, expires_in=timedelta(seconds=-1))
     run_purge()
     stats = run_purge()
-    assert stats == {"artifacts": 0, "orphans": 0, "dirs": 0, "idempotency_records": 0}
+    assert stats == {
+        "artifacts": 0,
+        "orphans": 0,
+        "dirs": 0,
+        "idempotency_records": 0,
+        "reports_scrubbed": 0,
+        "ip_hashes_cleared": 0,
+    }
     assert await db_session.scalar(select(func.count()).select_from(Artifact)) == 0
 
 
 async def test_missing_storage_root_is_fine():
     assert run_purge()["orphans"] == 0
+
+
+# --- personal data in rows -------------------------------------------------
+
+
+def days_ago(days: float) -> datetime:
+    return datetime.now(UTC) - timedelta(days=days)
+
+
+async def seed_history(db_session, *, age_days: float, retention_days=30, status="completed"):
+    """A report with a finished job, its raw result, events, questions and an answer. Returns
+    (report_id, job_id): reload() expires the ORM objects."""
+    org = await make_org(db_session)
+    program = await make_program(db_session, org)
+    program.retention_days = retention_days
+    author = await make_user(db_session, org, "admin")
+    report = await make_report(
+        db_session,
+        org,
+        program,
+        title="결제 실패 hong@example.com",
+        description="010-1234-5678 로 로그인",
+        expected_result="결제 완료",
+        test_data="card 4111",
+        client_context={"browser": "chrome"},
+        client_ip_hash="a" * 64,
+        fingerprint="f" * 64,
+        created_at=days_ago(age_days),
+    )
+    job = ValidationJob(
+        id=new_id(),
+        report_id=report.id,
+        org_id=org.id,
+        kind="initial",
+        status=status,
+        verdict="reproduced",
+        classification="functional",
+        scope_revision=1,
+        scope_snapshot={},
+        questions=[{"question": "어떤 계정?"}],
+        answers="계정은 hong",
+    )
+    db_session.add(job)
+    await db_session.flush()
+    report.latest_job_id = job.id
+    db_session.add(QaResult(job_id=job.id, raw={"report": {"summary": "hong"}}))
+    db_session.add(JobEvent(job_id=job.id, kind="stage", detail={"note": "hong"}))
+    db_session.add(
+        Clarification(
+            id=new_id(),
+            report_id=report.id,
+            job_id=job.id,
+            author_id=author.id,
+            answers="hong 계정",
+        )
+    )
+    await db_session.commit()
+    return report.id, job.id
+
+
+async def reload(db_session, model, key):
+    db_session.expire_all()
+    return await db_session.get(model, key)
+
+
+async def test_expired_report_text_scrubbed_stats_kept(db_session):
+    report_id, job_id = await seed_history(db_session, age_days=31)
+    stats = run_purge()
+    assert stats["reports_scrubbed"] == 1
+    r = await reload(db_session, Report, report_id)
+    assert (r.title, r.description, r.expected_result, r.test_data) == ("", "", "", "")
+    assert r.client_context is None and r.client_ip_hash is None
+    assert r.scrubbed_at is not None
+    assert (r.fingerprint, r.workflow_status, r.latest_job_id) == ("f" * 64, "received", job_id)
+    j = await reload(db_session, ValidationJob, job_id)
+    assert (j.status, j.verdict, j.classification) == ("completed", "reproduced", "functional")
+    assert j.questions == [] and j.answers is None
+    assert await reload(db_session, QaResult, job_id) is None
+    events = (await db_session.scalars(select(JobEvent).where(JobEvent.job_id == job_id))).all()
+    assert [(e.kind, e.detail) for e in events] == [("stage", {})]
+    answers = await db_session.scalar(
+        select(Clarification.answers).where(Clarification.report_id == report_id)
+    )
+    assert answers == ""
+    assert run_purge()["reports_scrubbed"] == 0  # once only
+
+
+async def test_report_within_retention_untouched(db_session):
+    report_id, job_id = await seed_history(db_session, age_days=29)
+    assert run_purge()["reports_scrubbed"] == 0
+    r = await reload(db_session, Report, report_id)
+    assert r.description == "010-1234-5678 로 로그인" and r.scrubbed_at is None
+    assert await reload(db_session, QaResult, job_id) is not None
+
+
+async def test_retention_days_is_per_program(db_session):
+    report_id, _ = await seed_history(db_session, age_days=8, retention_days=7)
+    assert run_purge()["reports_scrubbed"] == 1
+    assert (await reload(db_session, Report, report_id)).description == ""
+
+
+async def test_report_with_active_job_waits(db_session):
+    report_id, _ = await seed_history(db_session, age_days=40, status="running")
+    assert run_purge()["reports_scrubbed"] == 0
+    assert (await reload(db_session, Report, report_id)).scrubbed_at is None
+
+
+async def test_scrub_is_batched(db_session, monkeypatch):
+    for _ in range(3):
+        await seed_history(db_session, age_days=40)
+    monkeypatch.setattr(purge, "SCRUB_BATCH", 2)
+    assert run_purge()["reports_scrubbed"] == 2
+    assert run_purge()["reports_scrubbed"] == 1
+
+
+async def test_ip_hash_cleared_after_a_day_regardless_of_retention(db_session):
+    old_id, _ = await seed_history(db_session, age_days=1.5)
+    fresh_id, _ = await seed_history(db_session, age_days=0.5)
+    stats = run_purge()
+    assert (stats["ip_hashes_cleared"], stats["reports_scrubbed"]) == (1, 0)
+    o = await reload(db_session, Report, old_id)
+    assert o.client_ip_hash is None and o.description != ""
+    assert (await reload(db_session, Report, fresh_id)).client_ip_hash == "a" * 64
+
+
+async def test_create_job_rereads_scrub_under_row_lock(db_session):
+    """A caller holding a stale Report (loaded before the purge committed) is still refused."""
+    from app.core.errors import ApiError
+    from app.services.jobs import create_job
+
+    report_id, _ = await seed_history(db_session, age_days=40)
+    stale = await db_session.get(Report, report_id)
+    assert stale.scrubbed_at is None
+    await db_session.commit()
+    assert run_purge()["reports_scrubbed"] == 1
+    with pytest.raises(ApiError) as exc:
+        await create_job(db_session, stale, "fresh")
+    assert (exc.value.status, exc.value.code) == (410, "REPORT_EXPIRED")
+    await db_session.rollback()
+
+
+async def test_purge_skips_report_locked_by_job_creation(db_session):
+    report_id, _ = await seed_history(db_session, age_days=40)
+    # Without an IP hash the purge's IP UPDATE does not wait on the locked row.
+    await db_session.execute(
+        update(Report).where(Report.id == report_id).values(client_ip_hash=None)
+    )
+    await db_session.commit()
+    url = TEST_DATABASE_URL.replace("+psycopg", "")
+    with psycopg.connect(url) as other:  # an in-flight create_job: row locked, new job queued
+        other.execute("SELECT 1 FROM reports WHERE id = %s FOR UPDATE", (report_id,))
+        assert run_purge()["reports_scrubbed"] == 0
+        other.execute(
+            "INSERT INTO validation_jobs (id, report_id, org_id, kind, status, scope_revision,"
+            " scope_snapshot) SELECT %s, id, org_id, 'fresh', 'queued', 1, '{}' FROM reports"
+            " WHERE id = %s",
+            (new_id(), report_id),
+        )
+        other.commit()
+    assert run_purge()["reports_scrubbed"] == 0
+    assert (await reload(db_session, Report, report_id)).scrubbed_at is None

@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,6 +61,9 @@ class Report(Base):
     # HMAC of the client IP; the raw IP is never stored.
     client_ip_hash: Mapped[str | None] = mapped_column(String(64))
     duplicate_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # Set by the retention purge once the free text and client metadata are blanked; the row
+    # stays for statistics (status, verdicts, timestamps, counts).
+    scrubbed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()
 

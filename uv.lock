@@ -643,7 +643,7 @@ dependencies = [
     { name = "pillow" },
 ]
 wheels = [
-    { filename = "metaphor_core_engine-0.8.3-py3-none-any.whl", hash = "sha256:126dbcda4a1bb6e8a95a5a19d0732e02d3f1333db27b21881fa4308ab90ef269" },
+    { filename = "metaphor_core_engine-0.8.3-py3-none-any.whl", hash = "sha256:dd55825a103b6c2f9a5872c41a6f11f48ca0788475ea2c1174703a40940ae3bc" },
 ]
 
 [package.optional-dependencies]

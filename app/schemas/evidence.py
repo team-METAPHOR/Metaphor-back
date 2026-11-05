@@ -18,7 +18,8 @@ class Solution(BaseModel):
 
 
 class NextStep(BaseModel):
-    """The plan step an attempt stopped before. Typed values are never returned."""
+    """The plan step an attempt stopped before. Typed values are never returned. `reload`/`back`
+    (browser history, 0.7.0) always have target ""."""
 
     action: str
     target: str
@@ -105,6 +106,19 @@ class NextAction(BaseModel):
     retry_after_seconds: float | None = None
 
 
+class ModelFailure(BaseModel):
+    """A failed model call or a budget refusal (0.7.0 `diagnosis.model_failures[]`). A refusal
+    has `call_started: false`: no call was made, so it is never counted as one."""
+
+    phase: str | None
+    role: str | None
+    configured_model: str | None  # model id the worker configured for the call
+    model: str | None  # id the provider answered with; usually null on failure
+    status: str | None  # MODEL_RATE_LIMITED, MODEL_CALL_LIMIT, MODEL_TOKEN_LIMIT, ...
+    retry_after_seconds: float | None
+    call_started: bool | None
+
+
 class AiHypotheses(BaseModel):
     source: Literal["ai"] = "ai"
     root_cause_confirmed: Literal[False] = False
@@ -140,6 +154,8 @@ class Diagnosis(BaseModel):
     reason_codes: list[str]
     root_cause_confirmed: Literal[False] = False
     attempts: list[DiagnosisAttempt]
+    # Later model failures kept next to the browser blockers (never merged into one cause).
+    model_failures: list[ModelFailure] = []
     observed_facts: list[ObservedFact]
     next_actions: list[NextAction]
     missing_information: AiQuestions

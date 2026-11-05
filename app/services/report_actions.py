@@ -66,6 +66,11 @@ CODE_ACTIONS = {
     "DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "PRIVATE_DESTINATION_BLOCKED": "CHECK_TARGET_URL",
     "NAVIGATION_FAILED": "CHECK_TARGET_URL",
+    # Engine 0.7.0 split of TRANSPORT_ERROR: the target's TLS or connection failed.
+    "TLS_CERTIFICATE_ERROR": "CHECK_TARGET_URL",
+    "TLS_HANDSHAKE_ERROR": "CHECK_TARGET_URL",
+    "CONNECTION_REFUSED": "CHECK_TARGET_URL",
+    "CONNECTION_RESET": "CHECK_TARGET_URL",
     # Engine 0.6.0 approved writes: the reset before an attempt failed (no write sent), or the
     # worker refused the reset setup before the engine ran (app/worker/runner.py, resets.py).
     "RESET_FAILED": "CHECK_TEST_RESET",

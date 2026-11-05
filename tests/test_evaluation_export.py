@@ -103,6 +103,7 @@ async def test_json_export_has_every_tagged_report_once(client, world):
         "retests": 0,
         "model_calls": 2,
         "model_calls_usage_unknown": 1,
+        "model_limit_events": 0,
         "browser_attempts": 2,
         "report_files": 0,
         "outcomes": {

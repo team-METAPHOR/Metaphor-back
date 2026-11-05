@@ -17,6 +17,7 @@ from app.schemas.evidence import (
     Diagnosis,
     DiagnosisAttempt,
     Hypothesis,
+    ModelFailure,
     NextAction,
     NextStep,
     ObservedFact,
@@ -29,8 +30,11 @@ from app.schemas.evidence import (
 _CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-_ACTIONS = ("navigate", "click", "fill", "assert_text")
+_ACTIONS = ("navigate", "reload", "back", "click", "fill", "assert_text")
+# Browser history actions (0.7.0) have no target by contract.
+_HISTORY = ("reload", "back")
 _FAILED = {
+    "model_budget_exhausted",
     "execution_blocked",
     "environment_blocked",
     "scope_restricted",
@@ -102,6 +106,8 @@ def _next_step(value) -> NextStep | None:
     action = step.get("action")
     if action not in _ACTIONS:
         return None
+    if action in _HISTORY:
+        return NextStep(action=action, target="")
     target = public_url(step.get("target")) if action == "navigate" else _text(step.get("target"))
     return NextStep(action=action, target=target) if target else None
 
@@ -302,6 +308,34 @@ def _actions(value) -> list[NextAction]:
     return actions
 
 
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
+
+
+def model_id(value) -> str | None:
+    """A model id (letters, digits, `._:/-`), redacted; anything else (free text) → None."""
+    found = _match(_MODEL_ID, value)
+    return redact(found) if found else None
+
+
+def _model_failures(value) -> list[ModelFailure]:
+    items = []
+    for item in _list(value):
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            ModelFailure(
+                phase=_match(_NAME, item.get("phase")),
+                role=_match(_NAME, item.get("role")),
+                configured_model=model_id(item.get("configured_model")),
+                model=model_id(item.get("model")),
+                status=_match(_CODE, item.get("status")),
+                retry_after_seconds=_num(item.get("retry_after_seconds")),
+                call_started=_bool(item.get("call_started")),
+            )
+        )
+    return items
+
+
 def _hypotheses(value) -> list[Hypothesis]:
     items = []
     for item in _list(value):
@@ -350,7 +384,11 @@ def build(job_status: str, raw: dict | None) -> tuple[str, Diagnosis | None]:
         hypotheses = engine.get("hypotheses")
     else:
         attempt_items = raw_evidence
-        codes = [report.get("error_code"), *(e.get("blocker") for e in raw_evidence)]
+        # Same order as the engine (0.7.0): a later MODEL_ error never hides a browser blocker.
+        task_error = report.get("error_code")
+        blockers = [e.get("blocker") for e in raw_evidence]
+        model_error = isinstance(task_error, str) and task_error.startswith("MODEL_")
+        codes = [*blockers, task_error] if model_error else [task_error, *blockers]
         codes = list(dict.fromkeys(c for c in codes if _match(_CODE, c)))
         questions = report.get("questions")
         hypotheses = _dict(report.get("analysis")).get("hypotheses")
@@ -373,6 +411,7 @@ def build(job_status: str, raw: dict | None) -> tuple[str, Diagnosis | None]:
         interpretation=_text(engine.get("interpretation")),
         reason_codes=codes,
         attempts=attempts,
+        model_failures=_model_failures(engine.get("model_failures")),
         observed_facts=_facts(engine.get("observed_facts"), _non_fatal(report.get("observations"))),
         next_actions=_actions(engine.get("next_actions")),
         missing_information=AiQuestions(

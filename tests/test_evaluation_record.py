@@ -329,3 +329,41 @@ async def test_tag_shown_viewer_reads_other_org_404(client, db_session, world):
     _, outsider_h = await login_as(client, db_session, other, "admin")
     response = await client.get(f"/api/v1/reports/{report.id}/eval-record", headers=outsider_h)
     assert response.status_code == 404
+
+
+async def test_model_limit_events_are_kept_apart_from_calls(client, db_session, world):
+    """Engine 0.7.0: a budget refusal (call_started false) is listed, never counted as a call."""
+    job = await add_job(db_session, world, status="inconclusive")
+    calls = [
+        {
+            "phase": "plan",
+            "role": "primary",
+            "status": "completed",
+            "configured_model": "gpt-5.4-mini",
+            "model": "gpt-5.4-mini-2026-03-01",
+        },
+    ]
+    stored = raw(calls=calls)
+    stored["report"]["model_limit_events"] = [
+        {
+            "phase": "repair",
+            "role": "primary",
+            "configured_model": "gpt-5.4-mini",
+            "error_code": "MODEL_CALL_LIMIT",
+            "call_started": False,
+        },
+    ]
+    db_session.add(QaResult(job_id=job.id, raw=stored))
+    await db_session.commit()
+    (out,) = (await record(client, world))["jobs"]
+    assert [c["configured_model"] for c in out["model_calls"]] == ["gpt-5.4-mini"]
+    assert out["model_limit_events"] == [
+        {
+            "phase": "repair",
+            "role": "primary",
+            "configured_model": "gpt-5.4-mini",
+            "error_code": "MODEL_CALL_LIMIT",
+            "call_started": False,
+        }
+    ]
+    assert out["error_codes"] == ["MODEL_CALL_LIMIT"]

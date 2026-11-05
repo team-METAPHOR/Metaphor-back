@@ -72,6 +72,7 @@ async def result_parts(db: AsyncSession, job_ids: list[str]) -> dict[str, dict]:
         select(
             QaResult.job_id,
             report["model_calls"],
+            report["model_limit_events"],
             report["timings"],
             report["plan_review"],
             report["run"]["evidence"],
@@ -81,12 +82,13 @@ async def result_parts(db: AsyncSession, job_ids: list[str]) -> dict[str, dict]:
     return {
         job_id: {
             "model_calls": calls,
+            "model_limit_events": limits,
             "timings": timings,
             "plan_review": review,
             "evidence": evidence,
             "elapsed_seconds": elapsed,
         }
-        for job_id, calls, timings, review, evidence, elapsed in rows
+        for job_id, calls, limits, timings, review, evidence, elapsed in rows
     }
 
 

@@ -212,6 +212,10 @@ BROWSER_LIMITS = BudgetLimits(
     max_requests_per_minute=120,
     max_concurrent_requests=4,
     max_total_requests=300,
+    # Replay adds a pass before the two attempts; image-heavy pages ran out of the 8 MiB default
+    # (DOWNLOAD_LIMIT on the 2nd attempt). Engine ceilings: 32 MiB total, 8 MiB per response.
+    max_download_bytes=32 * 1024 * 1024,
+    max_response_bytes=8 * 1024 * 1024,
 )
 
 

@@ -184,7 +184,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 - 선택자가 잘못되어 `querySelectorAll`이 예외를 던지면 그 선택자만 건너뛰지 말고 캡처를 중단하세요.
 
 - 응답에는 프로그램 id·이름·테스트 범위·조직 정보가 들어 있지 않습니다.
-- `Cache-Control: public, max-age=60`, `Vary: Origin`. 설정 변경은 최대 60초 뒤에 반영될 수 있습니다.
+- `Cache-Control: no-store`, `Vary: Origin`. 대시보드에서 바꾼 설정은 다음 페이지 로드부터 바로 반영됩니다.
 - 오류: `404 WIDGET_NOT_FOUND`, `403 ORIGIN_NOT_ALLOWED`, `422 VALIDATION_FAILED`(키 누락·길이 초과).
 
 ## 4. `POST /api/v1/widget/reports`

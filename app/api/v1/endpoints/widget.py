@@ -44,11 +44,9 @@ async def reports_preflight(request: Request, db: DbSession, project_key: Projec
 
 
 @router.get("/config", response_model=WidgetConfig)
-async def widget_config(
-    request: Request, response: Response, db: DbSession, project_key: ProjectKey
-):
+async def widget_config(request: Request, db: DbSession, project_key: ProjectKey):
+    # No cache: a toggle saved in the dashboard must reach the SDK on the next page load.
     origin = await _allow_origin(request, db, project_key)
-    response.headers["Cache-Control"] = "public, max-age=60"
     return await service.get_config(db, project_key, origin)
 
 

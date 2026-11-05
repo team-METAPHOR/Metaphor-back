@@ -1,0 +1,886 @@
+[
+ {
+  "id": "search-vague",
+  "page": "search",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "검색 결과가 안 나와요",
+   "description": "검색해도 상품이 하나도 안 나와요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "search-detailed",
+  "page": "search",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "검색 결과가 안 나와요",
+   "description": "상품 검색 화면에서 검색어에 노트북을 입력하고 검색을 누르면 0건으로 나옵니다. 노트북 거치대, 노트북 파우치가 있으니 2건이 나와야 합니다. 검색이 끝나면 아래에 검색 완료가 표시됩니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "search-crumbs",
+  "page": "search",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "검색 결과가 안 나와요",
+   "description": "검색해도 상품이 하나도 안 나와요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 20000,
+    "path": "{search}"
+   },
+   {
+    "type": "input",
+    "t": 12000,
+    "path": "{search}",
+    "target": {
+     "tag": "input",
+     "id": "query"
+    }
+   },
+   {
+    "type": "click",
+    "t": 9000,
+    "path": "{search}",
+    "target": {
+     "tag": "button",
+     "id": "search",
+     "text": "검색"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "search-crumbs-fixed",
+  "page": "search",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "검색 결과가 안 나와요",
+   "description": "검색해도 상품이 하나도 안 나와요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 20000,
+    "path": "{search}"
+   },
+   {
+    "type": "input",
+    "t": 12000,
+    "path": "{search}",
+    "target": {
+     "tag": "input",
+     "id": "query"
+    }
+   },
+   {
+    "type": "click",
+    "t": 9000,
+    "path": "{search}",
+    "target": {
+     "tag": "button",
+     "id": "search",
+     "text": "검색"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "cart-vague",
+  "page": "cart",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "장바구니 금액이 이상해요",
+   "description": "장바구니 합계가 틀려요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "cart-detailed",
+  "page": "cart",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "장바구니 금액이 이상해요",
+   "description": "장바구니에서 + 버튼을 한 번 눌러 수량을 2로 만들면 합계가 24,000원이어야 하는데 12,000원 그대로입니다. 텀블러 가격은 12,000원입니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "cart-crumbs",
+  "page": "cart",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "장바구니 금액이 이상해요",
+   "description": "장바구니 합계가 틀려요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 15000,
+    "path": "{cart}"
+   },
+   {
+    "type": "click",
+    "t": 6000,
+    "path": "{cart}",
+    "target": {
+     "tag": "button",
+     "id": "plus",
+     "text": "+"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "cart-crumbs-fixed",
+  "page": "cart",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "장바구니 금액이 이상해요",
+   "description": "장바구니 합계가 틀려요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 15000,
+    "path": "{cart}"
+   },
+   {
+    "type": "click",
+    "t": 6000,
+    "path": "{cart}",
+    "target": {
+     "tag": "button",
+     "id": "plus",
+     "text": "+"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "like-vague",
+  "page": "like",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "버튼이 안 눌려요",
+   "description": "후기 버튼이 가끔 안 먹어요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "like-detailed",
+  "page": "like",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "버튼이 안 눌려요",
+   "description": "상품 후기 화면에서 도움돼요 버튼을 세 번 누르면 옆 숫자가 3이어야 하는데 1에서 멈춥니다. 첫 클릭만 반영되고 두 번째부터는 반응이 없습니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "like-crumbs",
+  "page": "like",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "버튼이 안 눌려요",
+   "description": "후기 버튼이 가끔 안 먹어요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 14000,
+    "path": "{like}"
+   },
+   {
+    "type": "click",
+    "t": 8000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   },
+   {
+    "type": "click",
+    "t": 6000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   },
+   {
+    "type": "click",
+    "t": 4000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "like-crumbs-fixed",
+  "page": "like",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "버튼이 안 눌려요",
+   "description": "후기 버튼이 가끔 안 먹어요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 14000,
+    "path": "{like}"
+   },
+   {
+    "type": "click",
+    "t": 8000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   },
+   {
+    "type": "click",
+    "t": 6000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   },
+   {
+    "type": "click",
+    "t": 4000,
+    "path": "{like}",
+    "target": {
+     "tag": "button",
+     "id": "like",
+     "text": "도움돼요"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "products-vague",
+  "page": "products",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "상품 목록 오류",
+   "description": "필터를 누르면 상품이 안 떠요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "products-detailed",
+  "page": "products",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "상품 목록 오류",
+   "description": "상품 목록에서 신발 버튼을 누른 뒤 할인 상품 버튼을 누르면 '상품을 불러오지 못했습니다'가 나옵니다. 할인 중인 러닝화 1개가 보여야 합니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "products-crumbs",
+  "page": "products",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "상품 목록 오류",
+   "description": "필터를 누르면 상품이 안 떠요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 18000,
+    "path": "{products}"
+   },
+   {
+    "type": "click",
+    "t": 10000,
+    "path": "{products}",
+    "target": {
+     "tag": "button",
+     "id": "shoes",
+     "text": "신발"
+    }
+   },
+   {
+    "type": "click",
+    "t": 5000,
+    "path": "{products}",
+    "target": {
+     "tag": "button",
+     "id": "sale",
+     "text": "할인 상품"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "products-crumbs-fixed",
+  "page": "products",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "상품 목록 오류",
+   "description": "필터를 누르면 상품이 안 떠요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 18000,
+    "path": "{products}"
+   },
+   {
+    "type": "click",
+    "t": 10000,
+    "path": "{products}",
+    "target": {
+     "tag": "button",
+     "id": "shoes",
+     "text": "신발"
+    }
+   },
+   {
+    "type": "click",
+    "t": 5000,
+    "path": "{products}",
+    "target": {
+     "tag": "button",
+     "id": "sale",
+     "text": "할인 상품"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "detail-vague",
+  "page": "detail",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "상세 정보가 안 열려요",
+   "description": "상세 정보 창이 안 열려요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "detail-detailed",
+  "page": "detail",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "상세 정보가 안 열려요",
+   "description": "상품 상세 화면에서 상세 정보 보기 버튼을 누르면 무게 정보가 담긴 창이 열려야 하는데 아무것도 열리지 않습니다. 아래 상태 표시도 준비 완료에서 바뀌지 않습니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "detail-crumbs",
+  "page": "detail",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "상세 정보가 안 열려요",
+   "description": "상세 정보 창이 안 열려요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 12000,
+    "path": "{detail}"
+   },
+   {
+    "type": "click",
+    "t": 5000,
+    "path": "{detail}",
+    "target": {
+     "tag": "button",
+     "id": "open",
+     "text": "상세 정보 보기"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "detail-crumbs-fixed",
+  "page": "detail",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "상세 정보가 안 열려요",
+   "description": "상세 정보 창이 안 열려요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 12000,
+    "path": "{detail}"
+   },
+   {
+    "type": "click",
+    "t": 5000,
+    "path": "{detail}",
+    "target": {
+     "tag": "button",
+     "id": "open",
+     "text": "상세 정보 보기"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "checkout-vague",
+  "page": "checkout",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "결제 버튼이 가려져요",
+   "description": "휴대폰에서 결제가 안 돼요."
+  },
+  "breadcrumbs": null,
+  "viewport": {
+   "width": 375,
+   "height": 667
+  },
+  "expect": "reproduced"
+ },
+ {
+  "id": "checkout-detailed",
+  "page": "checkout",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "결제 버튼이 가려져요",
+   "description": "휴대폰(가로 375px)에서 주문 결제 화면을 열면 아래쪽 할인 쿠폰 배너가 결제하기 버튼을 덮어서 누를 수 없습니다. 결제하기 버튼이 배너와 겹치지 않고 눌려야 합니다."
+  },
+  "breadcrumbs": null,
+  "viewport": {
+   "width": 375,
+   "height": 667
+  },
+  "expect": "reproduced"
+ },
+ {
+  "id": "checkout-crumbs",
+  "page": "checkout",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "결제 버튼이 가려져요",
+   "description": "휴대폰에서 결제가 안 돼요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 16000,
+    "path": "{checkout}"
+   },
+   {
+    "type": "click",
+    "t": 7000,
+    "path": "{checkout}",
+    "target": {
+     "tag": "div",
+     "id": "promo",
+     "text": "첫 구매 10% 할인 쿠폰 받기"
+    }
+   }
+  ],
+  "viewport": {
+   "width": 375,
+   "height": 667
+  },
+  "expect": "reproduced"
+ },
+ {
+  "id": "checkout-crumbs-fixed",
+  "page": "checkout",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "결제 버튼이 가려져요",
+   "description": "휴대폰에서 결제가 안 돼요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 16000,
+    "path": "{checkout}"
+   },
+   {
+    "type": "click",
+    "t": 7000,
+    "path": "{checkout}",
+    "target": {
+     "tag": "div",
+     "id": "promo",
+     "text": "첫 구매 10% 할인 쿠폰 받기"
+    }
+   }
+  ],
+  "viewport": {
+   "width": 375,
+   "height": 667
+  },
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "login-vague",
+  "page": "login",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "로그인 후 이상한 곳으로 가요",
+   "description": "로그인하면 엉뚱한 화면이 나와요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "login-detailed",
+  "page": "login",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "로그인 후 이상한 곳으로 가요",
+   "description": "로그인 화면에서 아이디 칸에 tester를 입력하고 로그인을 누르면 주문 내역 화면으로 가야 하는데 홈 화면으로 이동합니다. 화면 제목이 주문 내역이어야 합니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "login-crumbs",
+  "page": "login",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "로그인 후 이상한 곳으로 가요",
+   "description": "로그인하면 엉뚱한 화면이 나와요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 25000,
+    "path": "{login}"
+   },
+   {
+    "type": "input",
+    "t": 15000,
+    "path": "{login}",
+    "target": {
+     "tag": "input",
+     "id": "user"
+    }
+   },
+   {
+    "type": "click",
+    "t": 11000,
+    "path": "{login}",
+    "target": {
+     "tag": "button",
+     "id": "login",
+     "text": "로그인"
+    }
+   },
+   {
+    "type": "navigation",
+    "t": 10000,
+    "path": "{home}"
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "login-crumbs-fixed",
+  "page": "login",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "로그인 후 이상한 곳으로 가요",
+   "description": "로그인하면 엉뚱한 화면이 나와요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 25000,
+    "path": "{login}"
+   },
+   {
+    "type": "input",
+    "t": 15000,
+    "path": "{login}",
+    "target": {
+     "tag": "input",
+     "id": "user"
+    }
+   },
+   {
+    "type": "click",
+    "t": 11000,
+    "path": "{login}",
+    "target": {
+     "tag": "button",
+     "id": "login",
+     "text": "로그인"
+    }
+   },
+   {
+    "type": "navigation",
+    "t": 10000,
+    "path": "{home}"
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ },
+ {
+  "id": "signup-vague",
+  "page": "signup",
+  "kind": "vague",
+  "fixed": false,
+  "report": {
+   "title": "회원가입이 안 돼요",
+   "description": "회원가입 마지막에 오류가 나요."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "signup-detailed",
+  "page": "signup",
+  "kind": "detailed",
+  "fixed": false,
+  "report": {
+   "title": "회원가입이 안 돼요",
+   "description": "회원가입에서 이름(테스터), 이메일(tester@example.com)을 넣고 다음으로 넘어간 뒤 3단계에서 우편번호 06236을 넣고 가입하기를 누르면 '우편번호 형식이 올바르지 않습니다'가 나옵니다. 5자리 우편번호면 가입 완료가 표시되어야 합니다."
+  },
+  "breadcrumbs": null,
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "signup-crumbs",
+  "page": "signup",
+  "kind": "vague+crumbs",
+  "fixed": false,
+  "report": {
+   "title": "회원가입이 안 돼요",
+   "description": "회원가입 마지막에 오류가 나요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 60000,
+    "path": "{signup}"
+   },
+   {
+    "type": "input",
+    "t": 50000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "name"
+    }
+   },
+   {
+    "type": "click",
+    "t": 45000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "next1",
+     "text": "다음"
+    }
+   },
+   {
+    "type": "input",
+    "t": 35000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "email"
+    }
+   },
+   {
+    "type": "click",
+    "t": 30000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "next2",
+     "text": "다음"
+    }
+   },
+   {
+    "type": "input",
+    "t": 15000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "zip"
+    }
+   },
+   {
+    "type": "click",
+    "t": 10000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "submit",
+     "text": "가입하기"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "reproduced"
+ },
+ {
+  "id": "signup-crumbs-fixed",
+  "page": "signup",
+  "kind": "vague+crumbs",
+  "fixed": true,
+  "report": {
+   "title": "회원가입이 안 돼요",
+   "description": "회원가입 마지막에 오류가 나요."
+  },
+  "breadcrumbs": [
+   {
+    "type": "navigation",
+    "t": 60000,
+    "path": "{signup}"
+   },
+   {
+    "type": "input",
+    "t": 50000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "name"
+    }
+   },
+   {
+    "type": "click",
+    "t": 45000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "next1",
+     "text": "다음"
+    }
+   },
+   {
+    "type": "input",
+    "t": 35000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "email"
+    }
+   },
+   {
+    "type": "click",
+    "t": 30000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "next2",
+     "text": "다음"
+    }
+   },
+   {
+    "type": "input",
+    "t": 15000,
+    "path": "{signup}",
+    "target": {
+     "tag": "input",
+     "id": "zip"
+    }
+   },
+   {
+    "type": "click",
+    "t": 10000,
+    "path": "{signup}",
+    "target": {
+     "tag": "button",
+     "id": "submit",
+     "text": "가입하기"
+    }
+   }
+  ],
+  "viewport": null,
+  "expect": "not_reproduced"
+ }
+]

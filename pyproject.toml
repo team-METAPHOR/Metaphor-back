@@ -38,8 +38,9 @@ testpaths = ["tests"]
 markers = [
     "e2e: needs a real model key and Chromium",
     "browser: drives Chromium (playwright install chromium --only-shell)",
+    "eval: real-model reproduction accuracy eval (tests/eval), measurement only",
 ]
-addopts = "-m 'not e2e'"
+addopts = "-m 'not e2e and not eval'"
 
 [tool.ruff]
 target-version = "py312"

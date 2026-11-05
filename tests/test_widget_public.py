@@ -416,6 +416,13 @@ async def test_ip_rate_limit_429(client, world):
     assert response.json()["error"]["code"] == "WIDGET_IP_RATE_LIMITED"
 
 
+async def test_ip_rate_limit_configurable(client, world, monkeypatch):
+    monkeypatch.setattr(get_settings(), "widget_ip_hourly_limit", 12)
+    for i in range(12):
+        assert (await post(client, world["key"], payload(title=f"t{i}"))).status_code == 201
+    assert (await post(client, world["key"], payload())).status_code == 429
+
+
 async def test_project_rate_limit_429(client, db_session, world):
     # Seed 100 widget reports from other IPs within the hour.
     await post(client, world["key"], payload())

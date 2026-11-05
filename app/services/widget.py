@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.core.hashing import CLIENT_IP, keyed_hash
 from app.core.text import redact, sanitize_text
@@ -36,7 +37,6 @@ MAX_PAYLOAD_BYTES = 32 * 1024
 MAX_DESCRIPTION = TEXT_LIMITS["description"]
 SDK_HEADER = "\n\n[SDK 감지 정보]\n"
 # ponytail: fixed limits; per-customer settings when someone asks.
-IP_HOURLY_LIMIT = 10
 PROJECT_HOURLY_LIMIT = 100
 DEDUP_WINDOW = {"hours": 24}
 # Mirrors the engine's built-in sensitive selectors (core_engine/observation.py, the
@@ -310,7 +310,7 @@ async def submit_report(
             await enforce_rate_limit(
                 db,
                 repo.count_since(program.id, window, ip_hash=client_ip_hash),
-                limit=IP_HOURLY_LIMIT,
+                limit=get_settings().widget_ip_hourly_limit,
                 code="WIDGET_IP_RATE_LIMITED",
             )
             await enforce_rate_limit(

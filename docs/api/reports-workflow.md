@@ -35,7 +35,7 @@
 - 플랫폼 `POST /reports` 응답은 성공과 같은 201이지만 `validation_job_id: null`, `status: "waiting_quota"`입니다.
 - 위젯 `POST /widget/reports` 응답은 성공과 똑같은 201 `{receipt_id, status: "received", created_at}`입니다. 고객사가 한도를 넘었다는 사실을 익명 신고자에게 알리지 않습니다.
 - 시간당 남용 한도(`REPORT_RATE_LIMITED`, `WIDGET_IP_RATE_LIMITED`, `WIDGET_PROJECT_RATE_LIMITED`)는 그대로 429로 거절합니다.
-- 나중에 실행하려면 기존 재실행 API `POST /reports/{id}/validation-jobs {"mode": "fresh"}`(reviewer, admin)를 씁니다. 여전히 한도를 넘으면 429 `DAILY_LIMIT_EXCEEDED`이고 제보는 계속 주차 상태입니다. 작업이 만들어지면 `run_blocked`가 지워집니다. 실행 모드는 `fresh`만 받습니다(`initial` 없음).
+- 나중에 실행하려면 기존 재실행 API `POST /reports/{id}/validation-jobs {"mode": "fresh"}`(developer, admin)를 씁니다. 여전히 한도를 넘으면 429 `DAILY_LIMIT_EXCEEDED`이고 제보는 계속 주차 상태입니다. 작업이 만들어지면 `run_blocked`가 지워집니다. 실행 모드는 `fresh`만 받습니다(`initial` 없음).
 
 ## 수정 확인 (`fix_verified`)
 
@@ -86,13 +86,13 @@
 
 | 파라미터 | 뜻 |
 |---|---|
-| `progress` | 여러 번 줄 수 있습니다(`?progress=new&progress=reproduced`). 값: `new` `reproducing` `reproduced` `triaged` `verified` `waiting_quota` `fixing` `dismissed` `closed`. `verified`·`waiting_quota`는 지금은 받기만 하고 아무 제보도 맞지 않습니다. 그 밖의 값은 422 `VALIDATION_FAILED`. |
+| `progress` | 여러 번 줄 수 있습니다(`?progress=new&progress=reproduced`). 값: `new` `reproducing` `reproduced` `triaged` `verified` `waiting_quota` `fixing` `dismissed` `closed`. 그 밖의 값은 422 `VALIDATION_FAILED`. |
 | `include_closed` | 기본 `false`. 마감(`closed`) 제보는 기본으로 빠지고, `include_closed=true`이거나 `progress`에 `closed`가 있을 때만 나옵니다. |
 | `from` / `to` | `created_at` 범위(ISO 8601). `from`은 포함, `to`는 제외. 시간대가 없으면 UTC로 봅니다. `from > to`이면 422. |
 | `q` | 제목·설명에서 대소문자 구분 없이 찾습니다. `%`, `_`도 글자 그대로 찾습니다. 최대 100자(넘으면 422). |
 | `source` / `program_id` / `assignee` | 기존 필터 그대로입니다. |
 
-`progress`는 저장된 열이 아니라 계산 값이지만, 필터는 SQL에서 같은 규칙(`progress_case`, `app/services/reports.py`)으로 걸러서 `total`과 페이지가 정확합니다.
+`progress`는 저장된 열이 아니라 계산 값이지만, 필터는 SQL에서 같은 규칙(`progress_case`, `app/services/reports.py`)으로 걸러서 `total`과 페이지가 정확합니다. `verified`는 "가장 최근에 끝난 작업이 통과한 `retest`"를 상관 서브쿼리로 확인하고(`fix_verified`와 같은 규칙), `waiting_quota`는 `reports.run_blocked = 'quota'`로 확인합니다. 두 규칙이 어긋나지 않는지 테스트가 모든 조합을 비교합니다.
 
 ### 페이지
 
@@ -106,22 +106,22 @@
 
 ## 회사 대시보드 요약 (`GET /orgs/{org_id}/report-summary`)
 
-구성원만 볼 수 있고, 아니면 404 `NOT_FOUND`입니다.
+`viewer`를 포함한 구성원만 볼 수 있고(읽기 전용), 아니면 404 `NOT_FOUND`입니다.
 
 ```json
 {
-  "counts": {"new": 3, "reproducing": 1, "reproduced": 4, "triaged": 2,
-             "fixing": 1, "dismissed": 0, "closed": 5},
+  "counts": {"new": 3, "reproducing": 1, "reproduced": 4, "triaged": 2, "verified": 1,
+             "waiting_quota": 2, "fixing": 1, "dismissed": 0, "closed": 5},
   "needs_attention": [{"id": "…", "number": 12, "title": "…", "progress": "reproduced"}]
 }
 ```
 
-- `counts`: 회사의 모든 제보(마감 포함)를 `progress`별로 셉니다. 모든 값이 키로 있고 없으면 0입니다. "재현 완료" 카드는 `reproduced + triaged`, "재현 중"은 `reproducing`, "신규"는 `new`입니다.
-- `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`이거나, 처리 상태가 `received`이고 최신 작업이 `needs_info`(질문에 답해야 함)인 제보입니다.
+- `counts`: 회사의 모든 제보(마감 포함)를 `progress`별로 셉니다. 모든 값이 키로 있고 없으면 0입니다. "재현 완료" 카드는 `reproduced + triaged`, "재현 중"은 `reproducing`, "신규"는 `new + waiting_quota`, "수정 확인됨"은 `verified`입니다.
+- `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`나 `waiting_quota`(한도 대기로 주차됨)이거나, 처리 상태가 `received`이고 최신 작업이 `needs_info`(질문에 답해야 함)인 제보입니다. 항목의 `progress`도 목록과 같은 규칙(`fix_verified`, `run_blocked` 포함)으로 계산합니다.
 
 ## 회사 재현 통계 (`GET /orgs/{org_id}/report-stats?days=7`)
 
-구성원만 볼 수 있습니다. `days`는 1~90으로 맞춰 씁니다(범위 밖이면 오류 대신 가까운 끝값). 기간은 작업·제보의 `created_at` 기준입니다.
+`viewer`를 포함한 구성원만 볼 수 있습니다. `days`는 1~90으로 맞춰 씁니다(범위 밖이면 오류 대신 가까운 끝값). 기간은 작업·제보의 `created_at` 기준입니다.
 
 | 필드 | 계산 |
 |---|---|

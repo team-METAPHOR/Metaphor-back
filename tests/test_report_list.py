@@ -4,11 +4,11 @@ from datetime import UTC, datetime, timedelta
 from itertools import product
 
 import pytest
-from sqlalchemy import String, literal, select, union_all
+from sqlalchemy import Boolean, String, literal, select, union_all
 
 from app.core.ids import new_id
 from app.models import ValidationJob
-from app.models.report import WORKFLOW_STATUSES
+from app.models.report import RUN_BLOCKED_REASONS, WORKFLOW_STATUSES
 from app.models.validation_job import JOB_STATUSES, VERDICTS
 from app.schemas.validation_job import JobBrief
 from app.services.reports import PROGRESS_VALUES, progress_case, report_progress
@@ -78,8 +78,9 @@ def ids(body):
 
 
 async def test_progress_case_agrees_with_python_for_every_case(db_session):
-    cases = [(w, None, None) for w in WORKFLOW_STATUSES]
-    cases += list(product(WORKFLOW_STATUSES, JOB_STATUSES, (*VERDICTS, None)))
+    jobs = [(None, None), *product(JOB_STATUSES, (*VERDICTS, None))]
+    flags = list(product((False, True), (None, *RUN_BLOCKED_REASONS)))
+    cases = [(w, s, v, f, b) for w in WORKFLOW_STATUSES for s, v in jobs for f, b in flags]
     rows = [
         select(
             literal(i),
@@ -88,18 +89,62 @@ async def test_progress_case_agrees_with_python_for_every_case(db_session):
                 literal(None if s is None else "j", String),
                 literal(s, String),
                 literal(v, String),
+                literal(f, Boolean),
+                literal(b, String),
             ),
         )
-        for i, (w, s, v) in enumerate(cases)
+        for i, (w, s, v, f, b) in enumerate(cases)
     ]
     sql = dict((await db_session.execute(union_all(*rows))).all())
-    for i, (w, s, v) in enumerate(cases):
+    seen = set()
+    for i, (w, s, v, f, b) in enumerate(cases):
         job = None if s is None else JobBrief(id="j", kind="initial", status=s, verdict=v)
-        expected = report_progress(w, job)
+        expected = report_progress(w, job, f, b)
         assert expected in PROGRESS_VALUES
-        assert sql[i] == expected, (w, s, v)
+        assert sql[i] == expected, (w, s, v, f, b)
+        seen.add(expected)
+    assert seen == set(PROGRESS_VALUES)
 
 
+async def test_progress_sql_verified_matches_fix_verified_ids(client, db_session, world):
+    """The correlated SQL subquery and `fix_verified_ids` agree on real job histories."""
+    histories = {
+        "passed": [{"verdict": "reproduced"}, {"kind": "retest", "verdict": "not_reproduced"}],
+        # An active job after the passing retest does not undo it (only finished jobs count).
+        "passed_then_running": [
+            {"kind": "retest", "verdict": "not_reproduced"},
+            {"kind": "fresh", "status": "queued"},
+        ],
+        "passed_then_failed": [
+            {"kind": "retest", "verdict": "not_reproduced"},
+            {"kind": "fresh", "verdict": "reproduced"},
+        ],
+        "retest_reproduced": [{"kind": "retest", "verdict": "reproduced"}],
+        "retest_inconclusive": [
+            {"kind": "retest", "status": "inconclusive", "verdict": "not_reproduced"}
+        ],
+        "fresh_not_reproduced": [{"kind": "fresh", "verdict": "not_reproduced"}],
+        "fixing_passed": [{"kind": "retest", "verdict": "not_reproduced"}],
+        "no_jobs": [],
+    }
+    reports = {}
+    for i, (name, jobs) in enumerate(histories.items()):
+        workflow = "fixing" if name.startswith("fixing") else "received"
+        report = await seed(db_session, world, workflow=workflow, title=name)
+        for n, job in enumerate(jobs):
+            await add_job(db_session, report, created_at=NOW + timedelta(seconds=i * 10 + n), **job)
+        reports[name] = report
+    await db_session.commit()
+    body = await get(client, world, "?limit=50")
+    flagged = {item["title"] for item in body["items"] if item["fix_verified"]}
+    assert flagged == {"passed", "passed_then_running", "fixing_passed"}
+    assert {item["title"] for item in body["items"] if item["progress"] == "verified"} == flagged
+    filtered = await get(client, world, "?progress=verified&limit=50")
+    assert {reports[t].id for t in flagged} == set(ids(filtered))
+    assert filtered["total"] == 3
+
+
+# --- GET /reports filters --------------------------------------------------
 # --- GET /reports filters --------------------------------------------------
 
 
@@ -111,8 +156,9 @@ async def test_progress_filter_repeatable_and_unknown_values_rejected(client, db
     body = await get(client, world, "?progress=new&progress=reproduced")
     assert set(ids(body)) == {new.id, reproduced.id}
     assert ids(await get(client, world, "?progress=reproducing")) == [reproducing.id]
-    # Values another branch introduces are accepted and simply match nothing yet.
-    assert ids(await get(client, world, "?progress=verified&progress=waiting_quota")) == []
+    parked = await seed(db_session, world, run_blocked="quota")
+    assert ids(await get(client, world, "?progress=waiting_quota")) == [parked.id]
+    assert ids(await get(client, world, "?progress=verified")) == []
     bad = await client.get("/api/v1/reports?progress=bogus", headers=world["dev_h"])
     assert (bad.status_code, bad.json()["error"]["code"]) == (422, "VALIDATION_FAILED")
 
@@ -232,6 +278,11 @@ async def test_summary_counts_by_progress_and_needs_attention(client, db_session
     await seed(db_session, world, workflow="closed")
     # needs_info on a report already being fixed needs no attention.
     await seed(db_session, world, workflow="fixing", job={"status": "needs_info"})
+    # Fix verified (counted, no attention) and parked over the quota (attention).
+    await seed(db_session, world, job={"kind": "retest", "verdict": "not_reproduced"})
+    parked = await seed(
+        db_session, world, title="parked", run_blocked="quota", age=timedelta(minutes=30)
+    )
     response = await summary(client, world)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -242,11 +293,18 @@ async def test_summary_counts_by_progress_and_needs_attention(client, db_session
         "reproduced": 2,
         "triaged": 2,
         "fixing": 1,
+        "verified": 1,
+        "waiting_quota": 1,
         "closed": 1,
     }
     assert body["needs_attention"] == [
         {"id": r.id, "number": r.number, "title": r.title, "progress": p}
-        for r, p in ((newest, "reproduced"), (needs_info, "triaged"), (older, "reproduced"))
+        for r, p in (
+            (newest, "reproduced"),
+            (parked, "waiting_quota"),
+            (needs_info, "triaged"),
+            (older, "reproduced"),
+        )
     ]
 
 
@@ -268,6 +326,15 @@ async def test_summary_and_stats_members_only(client, db_session, world):
         assert missing.status_code == 404
         anonymous = await client.get(f"/api/v1/orgs/{world['org'].id}/{path}")
         assert anonymous.status_code == 401
+
+
+async def test_viewer_reads_list_summary_and_stats(client, db_session, world):
+    report = await seed(db_session, world)
+    _, viewer_h = await login_as(client, db_session, world["org"], "viewer")
+    assert ids(await get(client, world, "?progress=new", viewer_h)) == [report.id]
+    for path in ("report-summary", "report-stats"):
+        response = await client.get(f"/api/v1/orgs/{world['org'].id}/{path}", headers=viewer_h)
+        assert response.status_code == 200, (path, response.text)
 
 
 # --- GET /orgs/{org_id}/report-stats ------------------------------------------

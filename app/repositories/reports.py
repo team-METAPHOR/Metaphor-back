@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import ColumnElement, Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models import Membership, Organization, Report, User, ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
@@ -39,6 +40,22 @@ async def fix_verified_ids(db: AsyncSession, report_ids: list[str]) -> set[str]:
         latest.c.verdict == "not_reproduced",
     )
     return set((await db.scalars(query)).all())
+
+
+def fix_verified_sql() -> ColumnElement:
+    """SQL twin of `fix_verified_ids`, correlated to `Report`: the latest finished job is a
+    passing retest. Uses its own alias, so it composes with a joined latest `ValidationJob`."""
+    job = aliased(ValidationJob)
+    passed = and_(job.kind == "retest", job.status == "completed", job.verdict == "not_reproduced")
+    latest = (
+        select(passed)
+        .where(job.report_id == Report.id, job.status.not_in(ACTIVE_JOB_STATUSES))
+        .order_by(job.created_at.desc(), job.id.desc())
+        .limit(1)
+        .correlate(Report)
+        .scalar_subquery()
+    )
+    return func.coalesce(latest, False)
 
 
 def count_by_author(author_id: str, since: datetime) -> Select:

@@ -102,8 +102,9 @@ class AttentionItem(BaseModel):
 
 class ReportSummary(BaseModel):
     """All of the org's reports (closed included), counted by `progress`; every value is
-    present, zero when none. `needs_attention`: newest 5 reports that are reproduced or whose
-    latest job waits for an answer (needs_info) while still `received`."""
+    present, zero when none. `needs_attention`: newest 5 reports that are reproduced, parked
+    over the quota (waiting_quota), or whose latest job waits for an answer (needs_info) while
+    still `received`."""
 
     counts: dict[str, int]
     needs_attention: list[AttentionItem]

@@ -5,7 +5,7 @@ import pytest
 
 from app.models import QaResult, ReportEvalTag
 from tests.factories import login_as, make_org, make_program, make_report
-from tests.test_evaluation_record import T0, add_job, raw
+from tests.test_evaluation_record import READINESS, T0, add_job, raw
 
 
 @pytest.fixture
@@ -41,7 +41,13 @@ async def world(client, db_session):
     def ctx(report):
         return {"report": report}
 
-    ok = await add_job(db_session, ctx(reports[("B02", "r1")]), end=60, verdict="reproduced")
+    ok = await add_job(
+        db_session,
+        ctx(reports[("B02", "r1")]),
+        end=60,
+        verdict="reproduced",
+        readiness=READINESS,
+    )
     calls = [
         {
             "phase": "intake",
@@ -104,6 +110,7 @@ async def test_json_export_has_every_tagged_report_once(client, world):
         "model_calls": 2,
         "model_calls_usage_unknown": 1,
         "model_limit_events": 0,
+        "readiness_configs": 1,
         "browser_attempts": 2,
         "report_files": 0,
         "outcomes": {
@@ -137,6 +144,13 @@ async def test_csv_export_one_row_per_report(client, world):
     assert (first["model_calls"], first["usage_unknown_calls"]) == ("2", "1")
     assert (first["input_tokens"], first["output_tokens"]) == ("10", "5")
     assert first["browser_ms"] == "5000"
+    assert (first["engine_version"], first["engine_commit"]) == ("0.7.0", "426b3da")
+    assert (first["primary_model"], first["critic_model"]) == (
+        "gpt-5.4-mini",
+        "openai/gpt-oss-120b",
+    )
+    assert first["critic_configured"] == "true"
+    assert rows[1]["engine_version"] == ""
     assert first["duplicate_submissions"] == "1"
     assert rows[1]["error_codes"] == "MODEL_RATE_LIMITED"
     assert rows[1]["processing_ms"] == "" and rows[1]["ended_ms"] == "30000"

@@ -3,6 +3,7 @@ read by the worker or copied into report text, engine input or report views."""
 
 import csv
 import io
+import json
 from datetime import UTC, datetime
 from typing import get_args
 
@@ -145,6 +146,25 @@ def model_calls(records) -> list[EvalModelCall]:
     return calls
 
 
+def usage_calls(rows) -> list[EvalModelCall]:
+    """Model calls from `model_usage` rows (they outlive the raw result's retention purge)."""
+    return [
+        EvalModelCall(
+            phase=row.phase,
+            role=row.role,
+            status=row.status,
+            model=model_id(row.model),
+            configured_model=model_id(row.configured_model),
+            usage_known=row.input_tokens is not None or row.output_tokens is not None,
+            input_tokens=row.input_tokens,
+            output_tokens=row.output_tokens,
+            latency_ms=row.latency_ms,
+            retry_after_seconds=row.retry_after_seconds,
+        )
+        for row in rows
+    ]
+
+
 def model_limit_events(records) -> list[EvalModelLimitEvent]:
     """Budget refusals only (`call_started` false); anything else is not a refusal record."""
     events = []
@@ -160,6 +180,22 @@ def model_limit_events(records) -> list[EvalModelLimitEvent]:
             )
         )
     return events
+
+
+def critic_matches(readiness, review) -> bool | None:
+    configured = ((readiness or {}).get("critic") or {}).get("enabled")
+    ran = review.get("enabled") if isinstance(review, dict) else None
+    if type(configured) is not bool or type(ran) is not bool:
+        return None
+    return configured == ran
+
+
+def readiness_key(readiness: dict | None) -> str | None:
+    """The configuration part of a snapshot (no time, scope or account): equal = same setup."""
+    if not isinstance(readiness, dict):
+        return None
+    keep = {k: readiness.get(k) for k in ("engine", "models", "critic", "limits")}
+    return json.dumps(keep, sort_keys=True, default=str)
 
 
 def _ordered(codes) -> list[str]:
@@ -202,19 +238,22 @@ def job_timing(
         if isinstance(e, dict) and type(e.get("elapsed_seconds")) in (int, float)
     ]
     persisted = job.finished_at if job.status not in ACTIVE_JOB_STATUSES else None
+    readable = job.report_readable_at
+    done = readable or persisted
     return EvalTiming(
         queued_at=job.created_at,
         claimed_at=job.started_at,
         engine_started_at=engine_start,
         engine_finished_at=engine_end,
         persisted_at=persisted,
+        report_readable_at=readable,
         queue_wait_ms=_ms(job.created_at, job.started_at),
         setup_ms=_ms(job.started_at, engine_start),
         engine_ms=_ms(engine_start, engine_end),
         model_ms=_seconds_ms(timings.get("model_seconds")),
         browser_ms=_seconds_ms(sum(attempts)) if attempts else None,
-        persist_ms=_ms(engine_end, persisted),
-        total_ms=_ms(job.created_at, persisted),
+        persist_ms=_ms(engine_end, done),
+        total_ms=_ms(job.created_at, done),
     )
 
 
@@ -242,6 +281,7 @@ async def build_records(
     parts = await repo.result_parts(db, job_ids)
     with_md = await repo.jobs_with_report_md(db, job_ids)
     automatic = await repo.automatic_job_ids(db, job_ids, AUTO_FRESH_ACTION)
+    usage = await repo.model_usage_for(db, job_ids)
     conditions: dict[str, list[EvalCondition]] = {}
     for row in await repo.conditions_for(db, job_ids):
         conditions.setdefault(row.job_id, []).append(
@@ -258,6 +298,9 @@ async def build_records(
     for job in jobs:
         job_parts = parts.get(job.id) or {}
         calls = model_calls(job_parts.get("model_calls"))
+        source = "result" if job.id in parts else None
+        if source is None and usage.get(job.id):
+            calls, source = usage_calls(usage[job.id]), "model_usage"
         limits = model_limit_events(job_parts.get("model_limit_events"))
         review = job_parts.get("plan_review")
         by_report.setdefault(job.report_id, []).append(
@@ -288,7 +331,10 @@ async def build_records(
                 ),
                 timing=job_timing(job, bounds.get(job.id, (None, None)), job_parts),
                 model_calls=calls,
+                model_calls_source=source,
                 model_limit_events=limits,
+                readiness=job.readiness,
+                critic_config_matches=critic_matches(job.readiness, review),
                 conditions=conditions.get(job.id, []),
                 result_url=f"/api/v1/validation-jobs/{job.id}/result",
                 artifacts_url=f"/api/v1/validation-jobs/{job.id}/artifacts",
@@ -300,7 +346,7 @@ async def build_records(
         qa = [job for job in report_jobs if job.kind in QA_KINDS]
         ready = next((job for job in qa if job.status == "completed"), None)
         final = qa[-1] if qa else None
-        ready_at = ready.timing.persisted_at if ready else None
+        ready_at = (ready.timing.report_readable_at or ready.timing.persisted_at) if ready else None
         ended_at = None if ready or final is None else final.timing.persisted_at
         tag = tags.get(report.id)
         records.append(
@@ -357,6 +403,7 @@ def _totals(items: list[EvalRecord]) -> EvalTotals:
         model_calls=len(calls),
         model_calls_usage_unknown=sum(not call.usage_known for call in calls),
         model_limit_events=sum(len(job.model_limit_events) for job in jobs),
+        readiness_configs=len({k for job in jobs if (k := readiness_key(job.readiness))}),
         browser_attempts=sum(job.browser_attempts for job in jobs),
         report_files=sum(job.report_md_available for job in jobs),
         outcomes=outcomes,
@@ -420,6 +467,12 @@ CSV_COLUMNS = (
     "browser_ms",
     "persist_ms",
     "browser_attempts",
+    "engine_version",
+    "engine_commit",
+    "primary_model",
+    "critic_model",
+    "critic_configured",
+    "critic_config_matches",
     "report_url",
 )
 
@@ -451,6 +504,8 @@ def csv_row(item: EvalRecord) -> dict:
     decisive = next((job for job in qa if job.status == "completed"), qa[-1] if qa else None)
     timing = decisive.timing if decisive else None
     review = (decisive.plan_review or {}) if decisive else {}
+    ready = (decisive.readiness or {}) if decisive else {}
+    engine, models = ready.get("engine") or {}, ready.get("models") or {}
     return {
         "eval_run_id": item.eval.eval_run_id if item.eval else None,
         "case_id": item.eval.case_id if item.eval else None,
@@ -490,6 +545,12 @@ def csv_row(item: EvalRecord) -> dict:
         "browser_ms": timing.browser_ms if timing else None,
         "persist_ms": timing.persist_ms if timing else None,
         "browser_attempts": sum(job.browser_attempts for job in qa),
+        "engine_version": engine.get("package_version"),
+        "engine_commit": engine.get("commit"),
+        "primary_model": (models.get("primary") or {}).get("model"),
+        "critic_model": (models.get("critic") or {}).get("model"),
+        "critic_configured": (ready.get("critic") or {}).get("enabled"),
+        "critic_config_matches": decisive.critic_config_matches if decisive else None,
         "report_url": item.report_url,
     }
 

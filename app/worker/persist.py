@@ -32,6 +32,19 @@ def normalize(raw: dict) -> dict:
     return json.loads(json.dumps(raw, default=str))
 
 
+def _short(value, limit: int) -> str | None:
+    return value[:limit] if isinstance(value, str) and value else None
+
+
+def _seconds(value) -> float | None:
+    return float(value) if type(value) in (int, float) and value >= 0 else None
+
+
+def _latency_ms(value) -> int | None:
+    seconds = _seconds(value)
+    return round(seconds * 1000) if seconds is not None else None
+
+
 def artifact_kind(path: Path) -> str | None:
     if path.name == SPEC_FILE:
         return "playwright_spec"
@@ -171,19 +184,25 @@ def persist_result(
         )
         if matrix:
             conditions.store_rows(conn, job_id, report)
+        # Real calls only: budget refusals (`model_limit_events`, call_started false) are not.
         for call in report.get("model_calls") or []:
             usage = call.get("usage") or {}
             conn.execute(
                 "INSERT INTO model_usage (job_id, org_id, phase, status, model, input_tokens, "
-                "output_tokens) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "output_tokens, role, configured_model, latency_ms, retry_after_seconds) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     job_id,
                     org_id,
                     call.get("phase") or call.get("role"),  # matrix budget records: role
                     call.get("status"),
-                    call.get("model"),
+                    _short(call.get("model"), 100),
                     usage.get("input_tokens"),
                     usage.get("output_tokens"),
+                    _short(call.get("role"), 20),
+                    _short(call.get("configured_model"), 200),
+                    _latency_ms(call.get("elapsed_seconds")),
+                    _seconds(call.get("retry_after_seconds")),
                 ),
             )
         expires = datetime.now(UTC) + timedelta(days=retention_days)
@@ -219,4 +238,9 @@ def persist_result(
             sync_events(conn, job_id, engine_dir)
         for child in child_dirs:
             sync_events(conn, job_id, child, source=child.name)
+    # After the commit: from here the API serves the result (eval "report readable" time).
+    conn.execute(
+        "UPDATE validation_jobs SET report_readable_at = clock_timestamp() WHERE id = %s",
+        (job_id,),
+    )
     return True

@@ -21,8 +21,8 @@ from tests.e2e.test_acceptance import (  # noqa: F401  (fixtures)
     get_json,
     run_worker,
     screenshot,
-    site,
-    world,
+    site,  # noqa: F811
+    world,  # noqa: F811
 )
 from tests.fakes import ScriptedModel, analysis, intake, plan
 
@@ -58,8 +58,8 @@ def _run(spec: bytes, env: dict[str, str], tmp: Path) -> subprocess.CompletedPro
 async def test_exported_spec_fails_on_bug_and_passes_when_fixed(
     client,
     db_session,
-    world,
-    site,
+    world,  # noqa: F811
+    site,  # noqa: F811
     conn,  # noqa: F811
 ):
     _, state = site

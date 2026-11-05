@@ -148,6 +148,7 @@ ws.binaryType = "arraybuffer";
 - 번호 공백은 정상입니다. 백엔드는 스트림별로 최근 텍스트 메시지 32개와 최신 화면 한 장만 보관합니다.
 - 재접속하면 `relay_state` 다음에 현재 스트림의 보관 메시지와 최신 화면을 `sequence` 순서로 다시 받습니다. 이미 처리한 번호 이하는 버리세요.
 - `progress.phase = "attempt_started"`를 받으면 이전 화면을 지웁니다(엔진 규칙).
+- `progress.data.action`은 엔진 0.7.0부터 `navigate`·`click`·`fill`·`assert_text`에 더해 `reload`(새로고침)·`back`(브라우저 뒤로 가기)일 수 있습니다. 서버는 값을 거르지 않고 그대로 중계합니다.
 - `kind = "end"`는 엔진 실행이 끝났다는 뜻이지 결과 저장이 끝났다는 뜻은 아닙니다. 결과는 `relay_state.preview = "ended"`를 받은 뒤 `GET /validation-jobs/{id}`와 `/result`로 확인하세요(`409 RESULT_NOT_READY`면 잠시 뒤 재시도).
 - 진행 단계의 `phase = "completed"`는 한 시도의 단계 완료입니다. 작업 완료로 처리하지 마세요.
 

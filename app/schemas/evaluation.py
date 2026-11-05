@@ -43,12 +43,23 @@ class EvalModelCall(BaseModel):
     role: str | None  # primary / critic
     status: str | None  # completed or the engine's error code (MODEL_RATE_LIMITED, ...)
     model: str | None  # model id the provider answered with; null when the call failed
-    configured_model: str | None = None  # worker-configured id; filled once captured (#105)
+    configured_model: str | None  # id the worker configured (engine 0.7.0; null on older runs)
     usage_known: bool
     input_tokens: int | None
     output_tokens: int | None
     latency_ms: int | None
     retry_after_seconds: float | None
+
+
+class EvalModelLimitEvent(BaseModel):
+    """A model call the engine refused to start for its per-job budget (0.7.0
+    `model_limit_events[]`). Not a call: never counted in model_calls or failed calls."""
+
+    phase: str | None
+    role: str | None
+    configured_model: str | None
+    error_code: str | None  # MODEL_CALL_LIMIT / MODEL_TOKEN_LIMIT
+    call_started: Literal[False] = False
 
 
 class EvalTiming(BaseModel):
@@ -99,6 +110,7 @@ class EvalJob(BaseModel):
     plan_review: dict | None  # {enabled, status, error_code}
     timing: EvalTiming
     model_calls: list[EvalModelCall]
+    model_limit_events: list[EvalModelLimitEvent] = []
     conditions: list[EvalCondition]
     result_url: str
     artifacts_url: str
@@ -139,6 +151,7 @@ class EvalTotals(BaseModel):
     retests: int
     model_calls: int
     model_calls_usage_unknown: int
+    model_limit_events: int  # budget refusals (not calls)
     browser_attempts: int
     report_files: int  # jobs with a stored report.md
     outcomes: dict[str, int]

@@ -194,7 +194,7 @@ async def retest_all(
     with its stored child plan. No engine job of its own: only per-condition children."""
     registry = {c.id: c for c in service.conditions}
     started = time.monotonic()
-    rows, calls, status, error = [], [], "completed", None
+    rows, calls, limits, status, error = [], [], [], "completed", None
     report_id = program_id = None
     for condition_id in condition_ids:
         row = {
@@ -237,6 +237,7 @@ async def retest_all(
             regression=report.get("regression"),
         )
         calls += report.get("model_calls") or []
+        limits += report.get("model_limit_events") or []
         if result.status == "cancelled" or cancelled.is_set():
             status, error = "cancelled", "CANCELLED"
     final, verdict, regression = retest_outcome(rows, status)
@@ -253,6 +254,7 @@ async def retest_all(
         "required_condition_ids": list(condition_ids),
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "model_calls": calls,
+        "model_limit_events": limits,
         "error_code": error,
     }
     return ConditionsResult(None, report_id, program_id, final, report)

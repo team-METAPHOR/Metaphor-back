@@ -173,7 +173,7 @@
 | `WAIT_FOR_QUOTA` | 오늘 실행 한도에 도달해 한도가 풀리면 다시 시도합니다 | 제보의 `run_blocked == "quota"`(한도 대기로 주차되어 아직 작업이 없음) |
 | `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류), `TEST_ACCOUNT_INVALID`(저장된 계정을 열 수 없음, 다시 저장 필요), `TEST_ACCOUNT_KEY_MISSING`·`TEST_ACCOUNT_KEY_INVALID`(워커 개인키 없음·오류, 운영자 조치) |
 | `CHECK_TEST_ACCOUNT` | 등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요 | `LOGIN_FAILED`(엔진 자동 로그인 실패: 계정 오류, 폼 불일치, 성공 신호 미확인). 작업 `error_code` 또는 재현 시도 근거의 `blocker` |
-| `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
+| `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx), `TLS_CERTIFICATE_ERROR`·`TLS_HANDSHAKE_ERROR`·`CONNECTION_REFUSED`·`CONNECTION_RESET`(엔진 0.7.0: 대상 서버 TLS·연결 실패. 세분화하지 못한 `TRANSPORT_ERROR`는 조치 없음) |
 | `USE_HTTPS_FOR_CREDENTIALS` | 테스트 계정이나 세션은 HTTPS 대상에서만 사용할 수 있습니다. 프로그램 원점을 유효한 인증서가 있는 HTTPS 주소로 다시 등록해 주세요 | `CREDENTIALS_REQUIRE_HTTPS`(엔진 0.4.1 또는 워커 실행 전 검사: HTTPS가 아닌 원점에 테스트 세션·계정을 쓰려 함) |
 | `CHECK_TEST_RESET` | 테스트 데이터 서버 초기화를 하지 못해 쓰기 검증을 멈췄습니다. 초기화 어댑터와 테스트 계정 설정을 확인해 주세요 | `RESET_FAILED`(엔진 0.6.0: 시도 전 초기화 실패, 쓰기 미전송), `STATE_RESET_REQUIRED`, `STATE_CHANGES_SESSION_CONFLICT`, `RESET_ACCOUNT_MISSING`, `RESET_ACCOUNT_NOT_APPROVED`, `RESET_TOKEN_MISSING`, `RESET_TARGET_NOT_APPROVED`(워커 실행 전 검사, [승인된 테스트 쓰기](./state-changes.md)) |
 | `REVIEW_WRITE_APPROVAL` | 재현에 승인되지 않은 쓰기 요청이 필요했습니다. 필요한 경로만 관리자 쓰기 승인에 추가할지 검토해 주세요 | `METHOD_NOT_ALLOWED`(읽기 전용 실행에서 쓰기 시도), `STATE_CHANGE_OUT_OF_SCOPE`(승인 규칙 밖 쓰기) |
@@ -215,8 +215,19 @@
   `not_observed`(테스트한 조건에서 증상 미관찰, 버그 없음·수정 완료가 아님), `needs_information`,
   `execution_failed`, `cancelled`, `inconclusive` 중 하나입니다. 그 밖에 `category`, `summary`,
   `interpretation`, `reason_codes`, `root_cause_confirmed`(항상 `false`), `timings`가 있습니다.
+  `category`에는 엔진 0.7.0의 `model_budget_exhausted`(작업별 모델 호출·토큰 예산 소진, `outcome`은
+  `execution_failed`)가 올 수 있습니다. `reason_codes`는 브라우저 차단 코드를 먼저, 그 뒤에 따라 나온
+  `MODEL_*` 작업 오류를 둡니다(브라우저 원인이 모델 오류에 가려지지 않음). 0.7.0 코드
+  `HISTORY_UNAVAILABLE`(뒤로 갈 방문 기록 없음), `CHECK_ATTRIBUTE_UNAVAILABLE`(검사할 ARIA 상태 속성
+  없음), `TLS_CERTIFICATE_ERROR`, `TLS_HANDSHAKE_ERROR`, `CONNECTION_REFUSED`, `CONNECTION_RESET`도 그대로
+  전달합니다. 이전 결과에는 없을 수 있습니다.
+- `model_failures[]`(엔진 0.7.0, 이전 결과는 `[]`): 실패한 모델 호출과 예산 거절을 단계·역할과 함께
+  나열합니다(`phase`, `role`, `configured_model`, `model`, `status`, `retry_after_seconds`,
+  `call_started`). 예산 거절은 `call_started: false`이며 실제 호출이 아닙니다. 브라우저 차단(`attempts[].blocker`)과
+  모델 오류를 둘 다 보존합니다.
 - `attempts[]`: `completed_steps`/`total_steps`, `failed_step_index`(0 기반), `next_step`
-  (`action`, `target`; 입력값은 내려주지 않고 URL은 쿼리·프래그먼트 제거), `blocker`, `ready`,
+  (`action`, `target`; 입력값은 내려주지 않고 URL은 쿼리·프래그먼트 제거. 엔진 0.7.0의 `reload`(새로고침)·
+  `back`(브라우저 뒤로 가기)은 `target`이 항상 `""`이며 빠지지 않습니다), `blocker`, `ready`,
   `expected_observed`, `symptom_observed`, `elapsed_seconds`, `evidence_ids`, `observation_ids`,
   `timeline[]`(`stage`, `step_index`, `elapsed_seconds`), `video`(`status`, `start_offset_seconds`,
   `duration_seconds`, `capture_error`; 파일 다운로드는 아직 없음),
@@ -233,7 +244,9 @@
 
 원본 결과(`GET /validation-jobs/{id}/result`)는 엔진 결과 전체를 개인정보 마스킹만 거쳐 저장한 그대로이므로
 `environment.state_changes`, `run.evidence[].blocked_requests`, `run.evidence[].state_changing_requests`,
-`observations[].network[].non_fatal`, `diagnosis.next_actions`가 모두 남습니다.
+`observations[].network[].non_fatal`, `diagnosis.next_actions`가 모두 남습니다. 0.7.0의
+`scenario.steps[]`의 `reload`/`back`(빈 `target`), 검사 `url_path`/`attribute`, `model_calls[].configured_model`,
+`model_limit_events[]`, `diagnosis.model_failures[]`도 그대로 남습니다.
 - `missing_information`, `hypotheses`는 모델 출력이라 각각 `source: "ai"`를 달고, `hypotheses`는
   `root_cause_confirmed: false`인 가설입니다.
 

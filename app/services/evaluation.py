@@ -18,6 +18,7 @@ from app.schemas.evaluation import (
     EvalExport,
     EvalJob,
     EvalModelCall,
+    EvalModelLimitEvent,
     EvalRecord,
     EvalTag,
     EvalTagUpdate,
@@ -27,6 +28,7 @@ from app.schemas.evaluation import (
 )
 from app.services.access import READ_ROLES, WRITE_ROLES, org_role, require_org_role
 from app.services.audit import record_audit
+from app.services.diagnosis import model_id
 from app.services.reports import load_visible_report
 from app.services.rerun import AUTO_FRESH_ACTION
 
@@ -131,7 +133,8 @@ def model_calls(records) -> list[EvalModelCall]:
                 phase=_code(record.get("phase")),
                 role=_code(record.get("role")),
                 status=_code(record.get("status")),
-                model=_code(record.get("model")),
+                model=model_id(record.get("model")),
+                configured_model=model_id(record.get("configured_model")),
                 usage_known=usage is not None,
                 input_tokens=_int((usage or {}).get("input_tokens")),
                 output_tokens=_int((usage or {}).get("output_tokens")),
@@ -142,6 +145,23 @@ def model_calls(records) -> list[EvalModelCall]:
     return calls
 
 
+def model_limit_events(records) -> list[EvalModelLimitEvent]:
+    """Budget refusals only (`call_started` false); anything else is not a refusal record."""
+    events = []
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict) or record.get("call_started") is not False:
+            continue
+        events.append(
+            EvalModelLimitEvent(
+                phase=_code(record.get("phase")),
+                role=_code(record.get("role")),
+                configured_model=model_id(record.get("configured_model")),
+                error_code=_code(record.get("error_code")),
+            )
+        )
+    return events
+
+
 def _ordered(codes) -> list[str]:
     seen: list[str] = []
     for code in codes:
@@ -150,7 +170,12 @@ def _ordered(codes) -> list[str]:
     return seen
 
 
-def job_error_codes(job: ValidationJob, parts: dict, calls: list[EvalModelCall]) -> list[str]:
+def job_error_codes(
+    job: ValidationJob,
+    parts: dict,
+    calls: list[EvalModelCall],
+    limits: list[EvalModelLimitEvent] = (),
+) -> list[str]:
     evidence = parts.get("evidence") if isinstance(parts.get("evidence"), list) else []
     review = parts.get("plan_review") if isinstance(parts.get("plan_review"), dict) else {}
     return _ordered(
@@ -160,6 +185,7 @@ def job_error_codes(job: ValidationJob, parts: dict, calls: list[EvalModelCall])
             *(e.get("blocker") for e in evidence if isinstance(e, dict)),
             review.get("error_code"),
             *(c.status for c in calls if c.status not in (None, "completed", "started")),
+            *(event.error_code for event in limits),
         ]
     )
 
@@ -232,6 +258,7 @@ async def build_records(
     for job in jobs:
         job_parts = parts.get(job.id) or {}
         calls = model_calls(job_parts.get("model_calls"))
+        limits = model_limit_events(job_parts.get("model_limit_events"))
         review = job_parts.get("plan_review")
         by_report.setdefault(job.report_id, []).append(
             EvalJob(
@@ -246,7 +273,7 @@ async def build_records(
                 reason_code=job.reason_code,
                 error_code=job.error_code,
                 backend_error_code=job.backend_error_code,
-                error_codes=job_error_codes(job, job_parts, calls),
+                error_codes=job_error_codes(job, job_parts, calls, limits),
                 browser_attempts=len(
                     [e for e in job_parts.get("evidence") or [] if isinstance(e, dict)]
                     if isinstance(job_parts.get("evidence"), list)
@@ -261,6 +288,7 @@ async def build_records(
                 ),
                 timing=job_timing(job, bounds.get(job.id, (None, None)), job_parts),
                 model_calls=calls,
+                model_limit_events=limits,
                 conditions=conditions.get(job.id, []),
                 result_url=f"/api/v1/validation-jobs/{job.id}/result",
                 artifacts_url=f"/api/v1/validation-jobs/{job.id}/artifacts",
@@ -328,6 +356,7 @@ def _totals(items: list[EvalRecord]) -> EvalTotals:
         retests=sum(item.retests for item in items),
         model_calls=len(calls),
         model_calls_usage_unknown=sum(not call.usage_known for call in calls),
+        model_limit_events=sum(len(job.model_limit_events) for job in jobs),
         browser_attempts=sum(job.browser_attempts for job in jobs),
         report_files=sum(job.report_md_available for job in jobs),
         outcomes=outcomes,
@@ -378,9 +407,11 @@ CSV_COLUMNS = (
     "model_calls",
     "failed_model_calls",
     "usage_unknown_calls",
+    "model_limit_events",
     "input_tokens",
     "output_tokens",
     "models",
+    "configured_models",
     "critic_enabled",
     "queue_wait_ms",
     "setup_ms",
@@ -446,9 +477,11 @@ def csv_row(item: EvalRecord) -> dict:
         "model_calls": len(calls),
         "failed_model_calls": sum(c.status not in ("completed", None) for c in calls),
         "usage_unknown_calls": sum(not c.usage_known for c in calls),
+        "model_limit_events": sum(len(job.model_limit_events) for job in qa),
         "input_tokens": _sum_known([c.input_tokens for c in calls]),
         "output_tokens": _sum_known([c.output_tokens for c in calls]),
         "models": "|".join(_ordered(c.model for c in calls)),
+        "configured_models": "|".join(_ordered(c.configured_model for c in calls)),
         "critic_enabled": review.get("enabled"),
         "queue_wait_ms": timing.queue_wait_ms if timing else None,
         "setup_ms": timing.setup_ms if timing else None,

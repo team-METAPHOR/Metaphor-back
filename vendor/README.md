@@ -24,9 +24,9 @@ computes the SRI hash from the bytes, so the hash below is for reference only.
 
 | Field | Value |
 |---|---|
-| Version | `0.0.0` (`package.json`; pre-release build, no GitHub Release yet) |
-| Source | `team-METAPHOR/Metaphor-sdk` main @ `d5a7131b1f483ef72b1db109cb6ebb5d73d3b8d3` (`npm ci && npm run build` → `dist/metaphor.js`) |
-| SRI | `sha384-/jWCOMS5CXN8OyQGKQpFE74LnL+rzwZvGacXX5rE7FFNwgQSq09WnopIKDD6dBR2` |
+| Version | `0.1.0` |
+| Source | GitHub Release `v0.1.0` of `team-METAPHOR/Metaphor-sdk` @ `55414812a86f210f6623ef5ec89f2010d654349d` (`scripts/vendor-sdk.sh v0.1.0`) |
+| SRI | `sha384-vF5ysgyc5lVZ5eow4ph38mlfS/rAYTTaA/70w4dsIlB3Sr50ANt//3JgxGMOfXvl` (matches the release's `metaphor.js.sha384`) |
 
 `sdk/VERSION` holds the version on line 1 and the SDK commit on line 2. The version is the
 pinned URL (`metaphor-<version>.js`, cached as `immutable`), so **never change the bundle

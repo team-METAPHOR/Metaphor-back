@@ -246,7 +246,7 @@ async def test_create_report_failure_removes_written_file(db_session, world, sto
     _, user, program = world
 
     async def boom(*args, **kwargs):
-        raise ApiError(429, "DAILY_LIMIT_EXCEEDED", "x")
+        raise ApiError(422, "ORIGIN_NOT_VERIFIED", "x")
 
     monkeypatch.setattr("app.services.reports.create_job", boom)
     sub = submission(program, user, screenshot=prepare_screenshot(png(), None))

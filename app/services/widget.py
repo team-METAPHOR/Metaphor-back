@@ -299,14 +299,11 @@ async def submit_report(
                 limit=PROJECT_HOURLY_LIMIT,
                 code="WIDGET_PROJECT_RATE_LIMITED",
             )
+            # Over the daily cap the report is still stored, just parked (no job). The reporter
+            # gets the same 201 either way, so the customer's quota state does not leak.
             day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-            await enforce_rate_limit(
-                db,
-                repo.count_since(program.id, day_start),
-                limit=widget_daily_limit(program),
-                code="WIDGET_DAILY_LIMITED",
-                message="오늘 받을 수 있는 위젯 신고 수를 초과했습니다.",
-            )
+            today = await db.scalar(repo.count_since(program.id, day_start))
+            over_cap = today >= widget_daily_limit(program)
             fp = None
             if body.error_type != "manual":
                 fp = fingerprint(program.id, body, context, page_path)
@@ -334,6 +331,7 @@ async def submit_report(
                     fingerprint=fp,
                     client_ip_hash=client_ip_hash,
                 ),
+                park_code="WIDGET_DAILY_LIMITED" if over_cap else None,
             )
             await db.refresh(report, ["created_at"])
             created_at = report.created_at.astimezone(UTC).isoformat()

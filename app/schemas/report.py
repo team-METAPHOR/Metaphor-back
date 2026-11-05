@@ -9,7 +9,8 @@ from app.schemas.validation_job import JobBrief
 class ReportCreated(BaseModel):
     id: str
     program_id: str
-    validation_job_id: str
+    # null with status "waiting_quota": stored over the daily quota, no job until a rerun.
+    validation_job_id: str | None
     status: str
     created_at: datetime
 
@@ -25,7 +26,15 @@ class Assignee(BaseModel):
 
 
 Progress = Literal[
-    "new", "reproducing", "reproduced", "triaged", "verified", "fixing", "dismissed", "closed"
+    "new",
+    "reproducing",
+    "reproduced",
+    "triaged",
+    "verified",
+    "waiting_quota",
+    "fixing",
+    "dismissed",
+    "closed",
 ]
 
 
@@ -39,6 +48,7 @@ class ReportItem(BaseModel):
     | dismissed       | (any)                                         | `dismissed`   |
     | received/fixing | (any), with `fix_verified`                    | `verified`    |
     | fixing          | (any)                                         | `fixing`      |
+    | received        | none, `run_blocked = quota` (parked)          | `waiting_quota` |
     | received        | none                                          | `new`         |
     | received        | queued / running / cancelling                 | `reproducing` |
     | received        | finished, verdict `reproduced`                | `reproduced`  |
@@ -47,7 +57,8 @@ class ReportItem(BaseModel):
     Finished = completed / inconclusive / needs_info / failed / cancelled. `fix_verified` = the
     latest *finished* job is a retest that ended completed + not_reproduced. Dashboard stages:
     new → 신규 신고, reproducing → 재현 중, reproduced/triaged → 재현 완료, fixing → 버그 수정 중,
-    verified → 수정 확인됨 (awaiting a manual close), closed → 마감 (closed by a person, only
+    verified → 수정 확인됨 (awaiting a manual close), waiting_quota → 한도 대기 (stored over
+    the daily quota; a rerun `fresh` starts it), closed → 마감 (closed by a person, only
     once the fix is verified). dismissed is a manual side exit.
     """
 

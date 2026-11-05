@@ -37,10 +37,18 @@ REPORT_HOURLY_LIMIT = 20
 TEXT_LIMITS = {"title": 200, "description": 8000, "expected_result": 2000, "test_data": 2000}
 
 
+# create_job refusal that parks a new report instead of rejecting it.
+QUOTA_CODES = ("DAILY_LIMIT_EXCEEDED",)
+
+
 async def create_report(
-    session: AsyncSession, sub: ReportSubmission
-) -> tuple[Report, ValidationJob]:
+    session: AsyncSession, sub: ReportSubmission, *, park_code: str | None = None
+) -> tuple[Report, ValidationJob | None]:
     """Store a report, its masked input image and its initial queued job.
+
+    Over quota (create_job's DAILY_LIMIT_EXCEEDED, or the caller's own cap passed as
+    `park_code`) the report is still stored but *parked*: no job, `run_blocked = "quota"`,
+    audit `report.parked`, and the returned job is None. A later rerun starts it.
 
     Runs inside the caller's transaction (wrap with `run_once` for Idempotency-Key). The image
     file is written first and removed again if anything after it fails.
@@ -99,7 +107,25 @@ async def create_report(
             session.add(artifact)
             report.input_artifact_id = artifact.id
             await session.flush()
-        job = await create_job(session, report, "initial")
+        job = None
+        if park_code is None:
+            try:
+                job = await create_job(session, report, "initial")
+            except ApiError as error:
+                if error.code not in QUOTA_CODES:
+                    raise
+                park_code = error.code
+        if job is None:
+            report.run_blocked = "quota"
+            await session.flush()
+            await record_audit(
+                session,
+                actor_id=sub.author_id,
+                org_id=program.owner_org_id,
+                action="report.parked",
+                target=report.id,
+                detail={"reason": "quota", "code": park_code},
+            )
         await record_audit(
             session,
             actor_id=sub.author_id,
@@ -183,8 +209,8 @@ async def submit_report(
             body = ReportCreated(
                 id=report.id,
                 program_id=program.id,
-                validation_job_id=job.id,
-                status=job.status,
+                validation_job_id=job.id if job else None,
+                status=job.status if job else "waiting_quota",
                 created_at=report.created_at,
             )
             return 201, body.model_dump(mode="json")
@@ -214,7 +240,10 @@ def _brief(job: ValidationJob | None) -> JobBrief | None:
 
 
 def report_progress(
-    workflow_status: str, job: JobBrief | ValidationJob | None, fix_verified: bool = False
+    workflow_status: str,
+    job: JobBrief | ValidationJob | None,
+    fix_verified: bool = False,
+    run_blocked: str | None = None,
 ) -> str:
     """Dashboard stage; the mapping table is documented on `ReportItem`."""
     if workflow_status in ("closed", "dismissed"):
@@ -223,6 +252,8 @@ def report_progress(
         return "verified"
     if workflow_status == "fixing":
         return workflow_status
+    if run_blocked == "quota":
+        return "waiting_quota"
     if job is None:
         return "new"
     if job.status in ACTIVE_JOB_STATUSES:
@@ -256,7 +287,7 @@ def _item(
         "origin_kind": report.origin_kind,
         "duplicate_count": report.duplicate_count,
         "workflow_status": report.workflow_status,
-        "progress": report_progress(report.workflow_status, job, fix_verified),
+        "progress": report_progress(report.workflow_status, job, fix_verified, report.run_blocked),
         "fix_verified": fix_verified,
         "closed_at": report.closed_at,
         "assignee": _assignee(assignee, assignee_active),

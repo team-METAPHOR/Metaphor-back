@@ -382,6 +382,8 @@ async def _call_engine(service, data: dict, reset, monitor: Monitor, relay: live
 
 
 def _request(job: dict, report: dict, data: dict) -> QARequest:
+    from app.services.widget_activity import render_activity
+
     return QARequest(
         report_id=report["id"],
         program_id=report["program_id"],
@@ -390,6 +392,7 @@ def _request(job: dict, report: dict, data: dict) -> QARequest:
         description=engine_description(job, report),
         expected_result=report["expected_result"],
         test_data=report["test_data"],
+        reporter_activity=render_activity(report.get("client_context")),
     )
 
 

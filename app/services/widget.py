@@ -106,6 +106,7 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
         and program.status == "active"
         and program.external_ai_allowed,
         "screenshot_allowed": approved or row.live_screenshot_enabled,
+        "activity_allowed": True,
         "auto_detect": {
             "enabled": auto,
             "js_error": auto,
@@ -266,6 +267,8 @@ async def submit_report(
         raise ApiError(422, "CONSENT_REQUIRED", "스크린샷 전송 동의가 필요합니다.")
     if body.environment is not None and not body.consent.environment:
         raise ApiError(422, "CONSENT_REQUIRED", "환경 정보 전송 동의가 필요합니다.")
+    if body.activity is not None and not body.consent.activity:
+        raise ApiError(422, "CONSENT_REQUIRED", "최근 조작 기록 전송 동의가 필요합니다.")
     _check_error_details(body)
     if body.mask_boxes and image is None:
         raise ApiError(422, "MASK_BOX_INVALID", "마스킹 영역은 스크린샷과 함께 보내야 합니다.")
@@ -291,6 +294,12 @@ async def submit_report(
         target_url, query_stripped = check_target_url(revision, entry_url)
         reported_url = redact(f"{origin}{_strip_query(page_path)}")
         context = _client_context(body, reported_url, query_stripped)
+        if body.activity is not None:
+            from app.services.widget_activity import clean_activity
+
+            context["activity"] = clean_activity(
+                body.activity, revision.base_url, lambda url: check_target_url(revision, url)
+            )
 
         async def create() -> tuple[int, dict]:
             # Serialize per program so the count-then-insert below is atomic.

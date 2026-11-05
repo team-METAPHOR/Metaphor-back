@@ -6,7 +6,7 @@ No auth, no CSRF, no cookies. Any origin may load it (`<script integrity crossor
 from fastapi import APIRouter, Request, Response
 
 from app.core.errors import ApiError
-from app.core.sdk_bundle import SdkBundle, get_bundle
+from app.core.sdk_bundle import SdkBundle, get_bundle, get_pinned_bundle
 
 router = APIRouter(prefix="/sdk/v1", tags=["sdk"])
 
@@ -41,7 +41,7 @@ async def latest_sdk(request: Request) -> Response:
 
 @router.api_route("/metaphor-{version}.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def pinned_sdk(version: str, request: Request) -> Response:
-    bundle = _require_bundle()
-    if version != bundle.version:
+    bundle = get_pinned_bundle(version)
+    if bundle is None:
         raise ApiError(404, "NOT_FOUND", "요청한 SDK 버전이 없습니다.")
     return _serve(request, bundle, PINNED_CACHE)

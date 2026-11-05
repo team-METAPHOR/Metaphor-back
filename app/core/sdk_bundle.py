@@ -40,7 +40,20 @@ def load_bundle(directory: Path = SDK_DIR) -> SdkBundle | None:
 
 
 _bundle = load_bundle()
+_versions = SDK_DIR / "versions"
+_archived = {
+    bundle.version: bundle
+    for directory in (_versions.iterdir() if _versions.is_dir() else ())
+    if directory.is_dir() and (bundle := load_bundle(directory)) is not None
+}
 
 
 def get_bundle() -> SdkBundle | None:
     return _bundle
+
+
+def get_pinned_bundle(version: str) -> SdkBundle | None:
+    # 사용자 입력을 파일 경로로 쓰지 않고, 시작 시 읽은 버전 목록에서만 조회합니다.
+    if _bundle is not None and _bundle.version == version:
+        return _bundle
+    return _archived.get(version)

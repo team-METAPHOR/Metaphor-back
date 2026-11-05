@@ -45,6 +45,16 @@ async def test_bundle_sri_matches_bytes():
     assert bundle is not None and bundle.integrity == SRI and bundle.version == VERSION
 
 
+async def test_previous_pinned_sdk_keeps_original_bytes_and_sri(client):
+    previous = (SDK_DIR / "versions" / "0.1.1" / "metaphor.js").read_bytes()
+    response = await client.get("/sdk/v1/metaphor-0.1.1.js")
+    assert response.status_code == 200
+    assert response.content == previous
+    assert "immutable" in response.headers["cache-control"]
+    digest = "sha384-" + base64.b64encode(hashlib.sha384(previous).digest()).decode()
+    assert digest == "sha384-40tPvdAPO7apKv4/QsIttvbVK4EYjfJhclZ+kNlhblxv/0IIFgduaY280rWd1blb"
+
+
 async def test_missing_bundle_503(client, monkeypatch, tmp_path):
     assert load_bundle(tmp_path) is None
     monkeypatch.setattr(sdk_api, "get_bundle", lambda: None)

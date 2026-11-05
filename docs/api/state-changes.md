@@ -1,6 +1,6 @@
 # 승인된 테스트 쓰기 (`state_changes`)
 
-엔진(core_engine 0.7.1, `38bbf5b`)은 기본적으로 읽기 전용입니다. 장바구니 담기·수량 변경처럼
+엔진(core_engine 0.8.0, `4c6b024`)은 기본적으로 읽기 전용입니다. 장바구니 담기·수량 변경처럼
 서버 상태를 바꾸는 요청(POST/PUT/PATCH/DELETE)은 **관리자가 프로그램 범위에 승인한 경로만**,
 **실제 서버 초기화 어댑터가 연결된 경우에만** 보냅니다. 엔진 명세:
 Core_engine `docs/browser-request-policy.md`.

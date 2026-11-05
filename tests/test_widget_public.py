@@ -242,6 +242,7 @@ async def test_config_screenshot_allowed_per_origin(client, world):
         "widget_enabled": True,
         "reporting_enabled": True,
         "screenshot_allowed": True,
+        "activity_allowed": True,
         "auto_detect": {
             "enabled": True,
             "js_error": True,

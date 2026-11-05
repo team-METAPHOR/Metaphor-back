@@ -117,7 +117,7 @@ API 재시작을 수행한다. 워커 unit이 등록된 서버에서는 워커�
 3장의 복사와 daemon-reload를 다시 수행한다.
 
 엔진을 올린 배포(vendor 휠 교체)는 API만 재시작해서 끝내지 않는다. 워커도 재시작한 뒤
-워커가 쓰는 가상환경에서 실제 버전을 확인한다(현재 고정 `0.7.1`, `38bbf5b`).
+워커가 쓰는 가상환경에서 실제 버전을 확인한다(현재 고정 `0.8.0`, `4c6b024`).
 
 ```bash
 uv run python -c "import importlib.metadata as m; print(m.version('metaphor-core-engine'))"

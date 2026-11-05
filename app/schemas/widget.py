@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_ALLOWED_ORIGINS = 20
 
@@ -77,6 +77,45 @@ class Environment(_Payload):
 class Consent(_Payload):
     environment: bool = False
     screenshot: bool = False
+    activity: bool = False
+
+
+class ActivityNavigation(_Payload):
+    kind: Literal["navigation"]
+    path: str = Field(max_length=512, min_length=1)
+    age_ms: int = Field(strict=True, ge=0, le=120000)
+
+
+class ActivityClick(_Payload):
+    kind: Literal["click"]
+    path: str = Field(max_length=512, min_length=1)
+    age_ms: int = Field(strict=True, ge=0, le=120000)
+    selector: str = Field(max_length=256, min_length=1)
+    label: str = Field(default="", max_length=80)
+    feedback: list[Annotated[str, Field(max_length=120)]] = Field(
+        default_factory=list, max_length=2
+    )
+
+
+class RecentActivity(_Payload):
+    version: Literal[1]
+    truncated: bool = False
+    events: list[Annotated[ActivityNavigation | ActivityClick, Field(discriminator="kind")]] = (
+        Field(max_length=20)
+    )
+
+    @model_validator(mode="after")
+    def bounded(self):
+        import json
+
+        if (
+            len(json.dumps(self.model_dump(), ensure_ascii=False, separators=(",", ":")).encode())
+            > 8192
+        ):
+            raise ValueError("activity too large")
+        if any(a.age_ms < b.age_ms for a, b in zip(self.events, self.events[1:])):
+            raise ValueError("activity order invalid")
+        return self
 
 
 class WidgetReportPayload(_Payload):
@@ -88,6 +127,7 @@ class WidgetReportPayload(_Payload):
     environment: Environment | None = None
     mask_boxes: list[list[int]] | None = Field(default=None, max_length=20)
     consent: Consent = Consent()
+    activity: RecentActivity | None = None
 
 
 class AutoDetect(BaseModel):
@@ -107,6 +147,7 @@ class WidgetConfig(BaseModel):
     widget_enabled: bool
     reporting_enabled: bool
     screenshot_allowed: bool
+    activity_allowed: bool = True
     auto_detect: AutoDetect
     limits: WidgetLimits
     mask_selectors: list[str]

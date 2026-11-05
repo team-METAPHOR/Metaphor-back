@@ -28,8 +28,8 @@ worker = [
 ]
 
 [tool.uv.sources]
-# Built from team-METAPHOR/Core_engine@426b3da (see vendor/README.md).
-metaphor-core-engine = { path = "vendor/metaphor_core_engine-0.7.1-py3-none-any.whl" }
+# Built from team-METAPHOR/Core_engine@4c6b024 (see vendor/README.md).
+metaphor-core-engine = { path = "vendor/metaphor_core_engine-0.8.0-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

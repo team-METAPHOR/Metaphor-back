@@ -1,7 +1,7 @@
 """condition matrix runs: child engine mapping, per-source events, text schema_version
 
 Revision ID: 0018
-Revises: 0016
+Revises: 0017
 Create Date: 2026-11-05 18:30:00
 
 - validation_job_conditions maps each per-condition engine child to its backend job.
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0018"
-down_revision: str | Sequence[str] | None = "0016"
+down_revision: str | Sequence[str] | None = "0017"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

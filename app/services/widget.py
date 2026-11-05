@@ -99,7 +99,12 @@ async def get_config(db: AsyncSession, project_key: str, origin: str | None) -> 
     auto = row.auto_detect_enabled
     return {
         "widget_enabled": row.widget_enabled,
-        "reporting_enabled": row.widget_enabled and row.public_reporting_enabled and verified,
+        # Mirror create_report's gates so the SDK never shows a button that will be refused.
+        "reporting_enabled": row.widget_enabled
+        and row.public_reporting_enabled
+        and verified
+        and program.status == "active"
+        and program.external_ai_allowed,
         "screenshot_allowed": approved or row.live_screenshot_enabled,
         "auto_detect": {
             "enabled": auto,

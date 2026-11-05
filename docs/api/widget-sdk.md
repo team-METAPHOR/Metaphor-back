@@ -161,7 +161,7 @@ Metaphor는 버그를 항상 고객사가 승인한 **테스트 환경**(프로�
 | 필드 | 의미 | SDK 동작 |
 |---|---|---|
 | `widget_enabled` | 관리자가 위젯을 켰는지 | `false`면 위젯을 표시하지 않음 |
-| `reporting_enabled` | `widget_enabled && public_reporting_enabled` && 승인 원점 소유 확인 완료 | `false`면 신고 버튼을 숨김 |
+| `reporting_enabled` | `widget_enabled && public_reporting_enabled` && 승인 원점 소유 확인 완료 && 사이트 상태 `active` && `external_ai_allowed` | `false`면 신고 버튼을 숨김. 신고 저장(`create_report`)이 거부하는 조건과 같습니다 |
 | `screenshot_allowed` | 이 Origin에서 스크린샷을 받을지 | `false`면 스크린샷 UI 숨김 |
 | `auto_detect.*` | 자동 오류 감지 허용 여부(현재 네 값은 항상 같음) | `false`면 오류 자동 신고를 하지 않음 |
 | `limits` | 스크린샷 바이트, 설명 글자 수, 마스킹 박스 개수 상한 | 제출 전에 클라이언트에서 미리 검사 |

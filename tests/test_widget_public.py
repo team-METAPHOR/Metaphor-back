@@ -622,3 +622,15 @@ async def test_widget_unavailable_without_ip_secret_503(client, world, monkeypat
 def test_ip_hash_secret_not_in_settings_repr(monkeypatch):
     monkeypatch.setattr(get_settings(), "ip_hash_secret", "very-secret-value")
     assert "very-secret-value" not in repr(get_settings())
+
+
+@pytest.mark.parametrize("change", [{"status": "draft"}, {"external_ai_allowed": False}])
+async def test_config_reporting_off_when_program_not_accepting(client, world, db_session, change):
+    # create_report refuses these programs, so the SDK must not offer a report button.
+    for field, value in change.items():
+        setattr(world["program"], field, value)
+    await db_session.commit()
+    url = f"/api/v1/widget/config?project_key={world['key']}"
+    response = await client.get(url, headers={"Origin": STAGING})
+    assert response.status_code == 200
+    assert response.json()["reporting_enabled"] is False

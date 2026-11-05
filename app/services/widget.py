@@ -23,7 +23,7 @@ from app.schemas.widget import (
     MAX_BREADCRUMBS,
     WidgetReportPayload,
 )
-from app.services.breadcrumbs import clean_breadcrumbs
+from app.services.breadcrumbs import clean_breadcrumbs, render_breadcrumbs
 from app.services.idempotency import run_once
 from app.services.intake import (
     MAX_MASK_BOXES,
@@ -182,8 +182,11 @@ def _client_context(body: WidgetReportPayload, reported_url: str, query_stripped
     return context
 
 
-def engine_description(user_text: str, body: WidgetReportPayload, context: dict) -> str:
-    """User text + redacted SDK summary, capped at the engine description limit."""
+def engine_description(
+    user_text: str, body: WidgetReportPayload, context: dict, revision: ProgramScopeRevision
+) -> str:
+    """User text, then the redacted SDK summary, then recent user actions; capped at the
+    engine description limit. The user text comes first, so the cap only cuts the extras."""
     lines = []
     if body.error_type != "manual":
         lines.append(f"오류 유형: {body.error_type}")
@@ -200,9 +203,13 @@ def engine_description(user_text: str, body: WidgetReportPayload, context: dict)
             lines.append(f"UA: {env['user_agent']}")
         if env["viewport"]:
             lines.append(f"viewport: {env['viewport']['width']}x{env['viewport']['height']}")
-    if not lines:
-        return user_text
-    return (user_text + SDK_HEADER + "\n".join(lines))[:MAX_DESCRIPTION]
+    text = user_text
+    if lines:
+        text += SDK_HEADER + "\n".join(lines)
+    crumbs = render_breadcrumbs(context.get("breadcrumbs") or [], revision)
+    if crumbs:
+        text += "\n\n" + crumbs
+    return text[:MAX_DESCRIPTION]
 
 
 def fingerprint(program_id: str, body: WidgetReportPayload, context: dict, page_path: str) -> str:
@@ -347,7 +354,7 @@ async def submit_report(
                     author_id=None,
                     title=body.title,
                     description=engine_description(
-                        _clean(body.description, MAX_DESCRIPTION), body, context
+                        _clean(body.description, MAX_DESCRIPTION), body, context, revision
                     ),
                     screenshot=screenshot,
                     error_type=body.error_type,

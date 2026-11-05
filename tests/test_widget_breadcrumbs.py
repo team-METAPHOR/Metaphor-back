@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.models import Report
+from app.models import ProgramScopeRevision, Report
+from app.services.breadcrumbs import render_breadcrumbs
 from tests.factories import login_as, make_org, make_program
 from tests.test_widget_public import STAGING, post
 
@@ -200,3 +201,109 @@ async def test_widget_settings_patch_breadcrumbs_enabled(client, world):
     assert (await client.get(url, headers=headers)).json()["breadcrumbs_enabled"] is False
     response = await client.patch(url, json={"breadcrumbs_enabled": None}, headers=headers)
     assert response.status_code == 422
+
+
+# --- engine description -----------------------------------------------------
+
+
+def revision(**overrides):
+    values = {
+        "program_id": "p" * 32,
+        "revision": 1,
+        "base_url": "https://staging.example.com",
+        "allowed_path_prefixes": PREFIXES,
+        "excluded_path_prefixes": ["/admin"],
+        "allow_private_targets": False,
+        "private_cidrs": [],
+    }
+    values.update(overrides)
+    return ProgramScopeRevision(**values)
+
+
+EXAMPLE = [
+    {
+        "type": "click",
+        "t": 12400,
+        "path": "/products",
+        "target": {"tag": "button", "test_id": "add-to-cart", "id": "add", "text": "장바구니 담기"},
+    },
+    {"type": "navigation", "t": 9100, "path": "/cart"},
+    {"type": "input", "t": 6000, "path": "/cart", "target": {"tag": "input", "name": "coupon"}},
+    {
+        "type": "submit",
+        "t": 2200,
+        "path": "/cart",
+        "target": {"tag": "form", "id": "checkout", "selector": "form#checkout"},
+    },
+]
+
+
+def test_render_breadcrumbs_format():
+    assert render_breadcrumbs(EXAMPLE, revision()) == (
+        "[사용자 최근 동작] (오래된 순)\n"
+        '1. 12.4초 전 · /products · 클릭: button "장바구니 담기" [data-testid=add-to-cart]\n'
+        "2. 9.1초 전 · /cart · 페이지 이동\n"
+        "3. 6.0초 전 · /cart · 입력: input [name=coupon]\n"
+        "4. 2.2초 전 · /cart · 제출: form [id=checkout]"
+    )
+    selector_only = [
+        {"type": "click", "t": 0, "path": "/cart", "target": {"tag": "a", "selector": ".x"}}
+    ]
+    assert render_breadcrumbs(selector_only, revision()).endswith("클릭: a [.x]")
+    assert render_breadcrumbs([], revision()) == ""
+
+
+@pytest.mark.parametrize("path", ["/admin/users", "/settings", "/cart/checkout"])
+def test_out_of_scope_breadcrumb_path_hidden(path):
+    items = [{"type": "navigation", "t": 500, "path": path}, *EXAMPLE[1:2]]
+    lines = render_breadcrumbs(items, revision()).splitlines()
+    assert lines[1] == "1. 0.5초 전 · (범위 밖 페이지) · 페이지 이동"
+    assert path not in "\n".join(lines)
+    assert lines[2] == "2. 9.1초 전 · /cart · 페이지 이동"
+
+
+def test_breadcrumb_section_keeps_most_recent_within_budget():
+    items = [
+        {
+            "type": "click",
+            "t": 300_000 - i * 1000,
+            "path": "/products",
+            "target": {"tag": "button", "text": f"{i:02d}" + "가" * 78, "selector": "s" * 256},
+        }
+        for i in range(30)
+    ]
+    section = render_breadcrumbs(items, revision())
+    assert len(section) <= 2000
+    lines = section.splitlines()
+    assert lines[0] == "[사용자 최근 동작] (오래된 순)"
+    dropped = int(lines[1].removeprefix("(이전 동작 ").removesuffix("개 생략)"))
+    assert dropped > 0 and len(lines) - 2 == 30 - dropped
+    assert lines[2].startswith(f"{dropped + 1}. ")
+    assert lines[-1].startswith('30. 271.0초 전 · /products · 클릭: button "29')
+    # A single oversized line is still cut to the budget.
+    assert len(render_breadcrumbs(items[-1:], revision(), budget=100)) == 100
+
+
+async def test_engine_description_includes_breadcrumbs_after_sdk_info(client, db_session, world):
+    body = report_body(
+        EXAMPLE,
+        description="결제가 안 돼요",
+        environment={"user_agent": "UA/1.0"},
+        consent={"breadcrumbs": True, "environment": True},
+    )
+    assert (await post(client, world["key"], body)).status_code == 201
+    [report] = (await db_session.scalars(select(Report))).all()
+    text = report.description
+    assert text.startswith("결제가 안 돼요\n\n[SDK 감지 정보]\nUA: UA/1.0\n\n[사용자 최근 동작]")
+    assert text.index("[SDK 감지 정보]") < text.index("[사용자 최근 동작]")
+    assert "4. 2.2초 전 · /cart · 제출: form [id=checkout]" in text
+
+    # Without SDK info, the section follows the user text directly; long text is never cut
+    # in favor of breadcrumbs.
+    long = report_body(EXAMPLE, description="가" * 7990)
+    assert (await post(client, world["key"], long)).status_code == 201
+    longest = max(
+        (await db_session.scalars(select(Report))).all(), key=lambda r: len(r.description)
+    )
+    assert longest.description.startswith("가" * 7990 + "\n\n[사용자")
+    assert len(longest.description) == 8000

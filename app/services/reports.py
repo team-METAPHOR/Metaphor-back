@@ -280,12 +280,18 @@ def report_progress(
 PROGRESS_VALUES: tuple[str, ...] = get_args(Progress)
 
 
-def progress_case(workflow_status, job_id, job_status, job_verdict) -> ColumnElement:
+def progress_case(
+    workflow_status, job_id, job_status, job_verdict, fix_verified, run_blocked
+) -> ColumnElement:
     """SQL twin of `report_progress` (keep both in step; a test checks every combination).
-    Arguments are SQL expressions for the report's workflow_status and its latest job's id,
-    status and verdict (all NULL when there is no job)."""
+    Arguments are SQL expressions for the report's workflow_status, its latest job's id,
+    status and verdict (all NULL when there is no job), whether the fix is verified (boolean)
+    and the report's run_blocked."""
     return case(
-        (workflow_status.in_(("closed", "dismissed", "fixing")), workflow_status),
+        (workflow_status.in_(("closed", "dismissed")), workflow_status),
+        (fix_verified, "verified"),
+        (workflow_status == "fixing", workflow_status),
+        (run_blocked == "quota", "waiting_quota"),
         (job_id.is_(None), "new"),
         (job_status.in_(ACTIVE_JOB_STATUSES), "reproducing"),
         (job_verdict == "reproduced", "reproduced"),
@@ -296,7 +302,12 @@ def progress_case(workflow_status, job_id, job_status, job_verdict) -> ColumnEle
 def report_progress_sql() -> ColumnElement:
     """`progress_case` over `Report` and its latest `ValidationJob` (outer-joined)."""
     return progress_case(
-        Report.workflow_status, ValidationJob.id, ValidationJob.status, ValidationJob.verdict
+        Report.workflow_status,
+        ValidationJob.id,
+        ValidationJob.status,
+        ValidationJob.verdict,
+        reports_repo.fix_verified_sql(),
+        Report.run_blocked,
     )
 
 
@@ -409,9 +420,10 @@ ATTENTION_LIMIT = 5
 
 
 def needs_attention_sql() -> ColumnElement:
-    """Reproduced, or still `received` with the latest job waiting for an answer."""
+    """Reproduced, parked over the daily quota, or still `received` with the latest job
+    waiting for an answer."""
     return or_(
-        report_progress_sql() == "reproduced",
+        report_progress_sql().in_(("reproduced", "waiting_quota")),
         and_(Report.workflow_status == "received", ValidationJob.status == "needs_info"),
     )
 
@@ -423,6 +435,7 @@ async def report_summary(db: AsyncSession, user_id: str, org_id: str) -> ReportS
         rows = await reports_repo.newest_matching(
             db, org_id, needs_attention_sql(), ATTENTION_LIMIT
         )
+        verified = await reports_repo.fix_verified_ids(db, [report.id for report, _ in rows])
     return ReportSummary(
         counts={value: counts.get(value, 0) for value in PROGRESS_VALUES},
         needs_attention=[
@@ -430,7 +443,9 @@ async def report_summary(db: AsyncSession, user_id: str, org_id: str) -> ReportS
                 id=report.id,
                 number=report.number,
                 title=report.title,
-                progress=report_progress(report.workflow_status, job),
+                progress=report_progress(
+                    report.workflow_status, job, report.id in verified, report.run_blocked
+                ),
             )
             for report, job in rows
         ],

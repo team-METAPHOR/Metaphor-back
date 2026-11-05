@@ -10,7 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.core.text import redact
-from app.models import AuditEvent, Program, ProgramScopeRevision, QaResult, Report, ValidationJob
+from app.models import (
+    AuditEvent,
+    Program,
+    ProgramScopeRevision,
+    QaResult,
+    Report,
+    ValidationJob,
+    ValidationJobCondition,
+)
 from app.schemas.report import JobRequest
 from app.services import test_conditions
 from app.services.access import WRITE_ROLES, org_role
@@ -28,14 +36,29 @@ async def _retest_baseline(
     baseline = await db.get(ValidationJob, body.baseline_job_id)
     if baseline is None or baseline.report_id != report_id:
         raise ApiError(404, "NOT_FOUND", "기준 검증 작업을 찾을 수 없습니다.")
+    required: list[str] = []
     if baseline.has_conditions:
-        # ponytail: per-condition fix verification (#55) is a follow-up; until then a condition
-        # job is never a retest baseline, so one passing condition can't verify a fix.
-        raise ApiError(
-            409,
-            "CONDITION_RETEST_UNSUPPORTED",
-            "조건 비교 작업의 수정 확인은 아직 지원하지 않습니다.",
+        # Retest every condition that reproduced in the matrix run (a condition retest is
+        # never a baseline itself: it has no matrix engine job).
+        required = list(
+            (
+                await db.scalars(
+                    select(ValidationJobCondition.condition_id)
+                    .where(
+                        ValidationJobCondition.job_id == baseline.id,
+                        ValidationJobCondition.verdict == "reproduced",
+                        ValidationJobCondition.engine_job_id.is_not(None),
+                    )
+                    .order_by(ValidationJobCondition.ordinal)
+                )
+            ).all()
         )
+        if not required:
+            raise ApiError(
+                409,
+                "BASELINE_NOT_COMPARABLE",
+                "재현된 조건이 있는 조건 비교 작업만 재검증 기준이 될 수 있습니다.",
+            )
     # Product policy (stricter than the engine): only a confirmed verdict is a baseline.
     if (
         baseline.status != "completed"
@@ -58,7 +81,10 @@ async def _retest_baseline(
     if body.app_version not in revision.approved_app_versions:
         raise ApiError(422, "APP_VERSION_NOT_APPROVED", "승인된 테스트 배포 버전이 아닙니다.")
     # Same viewport/test context/session mode as the baseline; only the build changes.
-    return baseline, {**baseline.scope_snapshot, "app_version": body.app_version}
+    snapshot = {**baseline.scope_snapshot, "app_version": body.app_version}
+    if required:
+        snapshot["retest_condition_ids"] = required
+    return baseline, snapshot
 
 
 async def request_job(

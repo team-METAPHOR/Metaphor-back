@@ -118,7 +118,7 @@ def persist_result(
     *,
     org_id: str,
     report_id: str,
-    engine_dir: Path,
+    engine_dir: Path | None,
     retention_days: int,
     child_dirs: tuple[Path, ...] = (),
 ) -> bool:
@@ -187,7 +187,7 @@ def persist_result(
                 ),
             )
         expires = datetime.now(UTC) + timedelta(days=retention_days)
-        for path in sorted(p for d in (engine_dir, *child_dirs) for p in d.iterdir()):
+        for path in sorted(p for d in (engine_dir, *child_dirs) if d for p in d.iterdir()):
             kind = artifact_kind(path)
             if kind is None or not path.is_file() or path.is_symlink():
                 continue
@@ -215,7 +215,8 @@ def persist_result(
                     expires,
                 ),
             )
-        sync_events(conn, job_id, engine_dir)
+        if engine_dir is not None:
+            sync_events(conn, job_id, engine_dir)
         for child in child_dirs:
             sync_events(conn, job_id, child, source=child.name)
     return True

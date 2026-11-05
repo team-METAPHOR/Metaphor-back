@@ -3,18 +3,21 @@ and the per-condition rows stored from the engine's `conditions-1` result."""
 
 import json
 import os
+import time
 from pathlib import Path
 
 import psycopg
-from core_engine import BrowserOptions, TestCondition
+from core_engine import BrowserOptions, ConditionsResult, PolicyError, TestCondition
 
 SCHEMA = "conditions-1"
-# Engine matrix verdict → job verdict.
+# Engine matrix verdict → job verdict (a backend condition retest already uses job verdicts).
 MATRIX_VERDICTS = {
     "reproduced": "reproduced",
     "not_reproduced_in_tested_conditions": "not_reproduced",
+    "not_reproduced": "not_reproduced",
     "inconclusive": "inconclusive",
 }
+RETEST_KIND = "condition_retest"
 _VERDICTS = ("reproduced", "not_reproduced", "inconclusive")
 _STATUSES = ("needs_info", "completed", "inconclusive", "failed", "cancelled", "not_run")
 
@@ -55,18 +58,21 @@ def condition_reset(snapshot: dict, resets: dict):
     return reset
 
 
-def bind_child(conn: psycopg.Connection, job_id: str, engine_job_id: str) -> bool:
+def bind_child(
+    conn: psycopg.Connection, job_id: str, engine_job_id: str, condition_id: str | None = None
+) -> bool:
     """Map a newly created per-condition engine job to our (still active) job."""
     cur = conn.execute(
         """
-        INSERT INTO validation_job_conditions (job_id, ordinal, engine_job_id, status)
+        INSERT INTO validation_job_conditions
+            (job_id, ordinal, engine_job_id, condition_id, status)
         SELECT j.id, COALESCE(
                    (SELECT max(ordinal) FROM validation_job_conditions WHERE job_id = j.id), 0
-               ) + 1, %(engine)s, 'running'
+               ) + 1, %(engine)s, %(condition)s, 'running'
         FROM validation_jobs j
         WHERE j.id = %(job)s AND j.status IN ('running', 'cancelling')
         """,
-        {"job": job_id, "engine": engine_job_id},
+        {"job": job_id, "engine": engine_job_id, "condition": condition_id},
     )
     return cur.rowcount == 1
 
@@ -144,12 +150,98 @@ def summary(raw: dict, report: dict) -> dict:
         "verdict": MATRIX_VERDICTS.get(report.get("verdict")),
         "reason": None,
         "classification": None,
-        "regression": None,
+        "regression": report.get("regression"),
         "error": raw.get("error_code") or report.get("error_code"),
         "questions": list(questions),
         "analysis": False,
         "review": True,
     }
+
+
+def retest_outcome(rows: list[dict], status: str) -> tuple[str, str, str]:
+    """(job status, verdict, regression) of a condition retest. A fix is confirmed
+    (`not_reproduced`) only when every required condition ran and came back not_reproduced;
+    any reproduced condition → reproduced; anything else (mismatch, not run, cancelled,
+    failed) → inconclusive."""
+    if status == "completed" and any(r.get("verdict") == "reproduced" for r in rows):
+        return "completed", "reproduced", "still_reproduced"
+    if (
+        status == "completed"
+        and rows
+        and all(r["status"] == "completed" and r.get("verdict") == "not_reproduced" for r in rows)
+    ):
+        return "completed", "not_reproduced", "resolved_in_test"
+    return ("inconclusive" if status == "completed" else status), "inconclusive", "inconclusive"
+
+
+async def retest_all(
+    service, matrix_job_id: str, condition_ids: list[str], *, on_start, cancelled, **callbacks
+) -> ConditionsResult:
+    """Re-run every condition that reproduced in the matrix baseline, one after another, each
+    with its stored child plan. No engine job of its own: only per-condition children."""
+    registry = {c.id: c for c in service.conditions}
+    started = time.monotonic()
+    rows, calls, status, error = [], [], "completed", None
+    report_id = program_id = None
+    for condition_id in condition_ids:
+        row = {
+            "condition_id": condition_id,
+            "condition": registry[condition_id].public(),
+            "status": "not_run",
+            "verdict": None,
+            "error_code": error or "CONDITION_NOT_RUN",
+            "job_id": None,
+            "elapsed_seconds": None,
+        }
+        rows.append(row)
+        if status != "completed":
+            continue
+        if cancelled.is_set():
+            status, error = "cancelled", "CANCELLED"
+            row["error_code"] = error
+            continue
+        on_start(condition_id)
+        begin = time.monotonic()
+        try:
+            result = await service.retest(
+                matrix_job_id, condition_id, cancelled=cancelled, **callbacks
+            )
+        except PolicyError as exc:
+            status, error = ("cancelled" if exc.code == "CANCELLED" else "failed"), exc.code
+            row["error_code"] = error
+            continue
+        report = result.report or {}
+        report_id, program_id = result.report_id, result.program_id
+        row.update(
+            status=result.status,
+            verdict=((report.get("run") or {}).get("verdict") or {}).get("value"),
+            error_code=result.error_code or report.get("error_code"),
+            job_id=result.job_id,
+            elapsed_seconds=round(time.monotonic() - begin, 3),
+            diagnosis=report.get("diagnosis"),
+            environment=report.get("environment"),
+            regression=report.get("regression"),
+        )
+        calls += report.get("model_calls") or []
+        if result.status == "cancelled" or cancelled.is_set():
+            status, error = "cancelled", "CANCELLED"
+    final, verdict, regression = retest_outcome(rows, status)
+    report = {
+        "schema_version": SCHEMA,
+        "job_kind": RETEST_KIND,
+        "job_id": None,
+        "baseline_job_id": matrix_job_id,
+        "status": final,
+        "verdict": verdict,
+        "regression": regression,
+        "conditions": rows,
+        "matched_condition_ids": [r["condition_id"] for r in rows if r["verdict"] == "reproduced"],
+        "required_condition_ids": list(condition_ids),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "model_calls": calls,
+        "error_code": error,
+    }
+    return ConditionsResult(None, report_id, program_id, final, report)
 
 
 def video_enabled() -> bool:

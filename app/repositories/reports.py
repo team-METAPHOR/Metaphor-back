@@ -5,7 +5,14 @@ from sqlalchemy import ColumnElement, Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.models import Membership, Organization, Report, User, ValidationJob
+from app.models import (
+    Membership,
+    Organization,
+    Report,
+    User,
+    ValidationJob,
+    ValidationJobCondition,
+)
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 
 
@@ -17,6 +24,17 @@ async def get_by_number(db: AsyncSession, org_id: str, number: int) -> Report | 
     return await db.scalar(select(Report).where(Report.org_id == org_id, Report.number == number))
 
 
+def _all_conditions_passed(job) -> ColumnElement:
+    """A condition retest passes only when every required condition came back
+    not_reproduced (no row failed, reproduced, mismatched or was not run). Single retests
+    have no rows and keep the job-level rule."""
+    row = aliased(ValidationJobCondition)
+    return ~exists().where(
+        row.job_id == job.id,
+        or_(row.status != "completed", row.verdict.is_distinct_from("not_reproduced")),
+    )
+
+
 async def fix_verified_ids(db: AsyncSession, report_ids: list[str]) -> set[str]:
     """Reports whose latest finished job is a retest that passed (completed, not_reproduced).
     Jobs of a report run one at a time, so creation order is finish order."""
@@ -24,7 +42,11 @@ async def fix_verified_ids(db: AsyncSession, report_ids: list[str]) -> set[str]:
         return set()
     latest = (
         select(
-            ValidationJob.report_id, ValidationJob.kind, ValidationJob.status, ValidationJob.verdict
+            ValidationJob.report_id,
+            ValidationJob.kind,
+            ValidationJob.status,
+            ValidationJob.verdict,
+            _all_conditions_passed(ValidationJob).label("conditions_passed"),
         )
         .where(
             ValidationJob.report_id.in_(report_ids),
@@ -38,6 +60,7 @@ async def fix_verified_ids(db: AsyncSession, report_ids: list[str]) -> set[str]:
         latest.c.kind == "retest",
         latest.c.status == "completed",
         latest.c.verdict == "not_reproduced",
+        latest.c.conditions_passed,
     )
     return set((await db.scalars(query)).all())
 
@@ -46,7 +69,12 @@ def fix_verified_sql() -> ColumnElement:
     """SQL twin of `fix_verified_ids`, correlated to `Report`: the latest finished job is a
     passing retest. Uses its own alias, so it composes with a joined latest `ValidationJob`."""
     job = aliased(ValidationJob)
-    passed = and_(job.kind == "retest", job.status == "completed", job.verdict == "not_reproduced")
+    passed = and_(
+        job.kind == "retest",
+        job.status == "completed",
+        job.verdict == "not_reproduced",
+        _all_conditions_passed(job),
+    )
     latest = (
         select(passed)
         .where(job.report_id == Report.id, job.status.not_in(ACTIVE_JOB_STATUSES))
@@ -285,6 +313,7 @@ async def count_passed_retests(
             ValidationJob.kind == "retest",
             ValidationJob.status == "completed",
             ValidationJob.verdict == "not_reproduced",
+            _all_conditions_passed(ValidationJob),
             *_window(ValidationJob.created_at, Report.program_id, since, until, program_id),
         )
     )

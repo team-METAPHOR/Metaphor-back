@@ -181,6 +181,8 @@ class Monitor(threading.Thread):
         self.engine_dir: Path | None = None
         # Per-condition child engine dirs of a matrix job, in creation order.
         self.child_dirs: list[Path] = []
+        # Condition retest: ids of the conditions started so far (last = the one running).
+        self.current_condition: list[str] = []
         self._authorized = False
         self._checked_at = 0.0
 
@@ -286,6 +288,14 @@ async def _call_engine(service, data: dict, reset, monitor: Monitor):
         "cancelled": monitor.cancelled,
     }
     snapshot = job["scope_snapshot"]
+    if isinstance(service, ConditionsService) and job["kind"] == "retest":
+        return await matrix.retest_all(
+            service,
+            data["source_engine_id"],
+            snapshot["retest_condition_ids"],
+            on_start=monitor.current_condition.append,
+            **callbacks,
+        )
     if isinstance(service, ConditionsService):
         return await service.run(
             _request(job, report, data), **callbacks, select=snapshot["condition_select"]
@@ -341,13 +351,16 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         c["reset_adapter"] not in RESETS for c in conditions
     ):
         raise JobInputError("RESET_ADAPTER_UNKNOWN")
-    if conditions and job["kind"] not in ("initial", "fresh"):
-        # ponytail: matrix resume/retest is a follow-up; the API never queues one.
+    if conditions and job["kind"] == "resume":
+        # The engine has no matrix resume; the API never queues one.
         raise JobInputError("CONDITION_KIND_UNSUPPORTED")
+    condition_retest = bool(conditions) and job["kind"] == "retest"
     root = storage.safe_path(report["org_id"], report["id"])
     if job["kind"] in ("resume", "retest"):
         source = data["source_engine_id"]
         needed = BASELINE_FILES if job["kind"] == "retest" else RESUME_FILES
+        if condition_retest:
+            needed = ("result.json",)  # the matrix result; children are read by the engine
         if not source or not all((root / source / name).is_file() for name in needed):
             # e.g. a worker without the shared volume, or files removed by retention.
             raise JobInputError("BASELINE_ARTIFACTS_MISSING")
@@ -359,8 +372,10 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
     def bind(engine_job_id: str) -> None:
         # Matrix job: the first engine job is the matrix itself, every later one a condition
         # child (own dir, own event sequence), mapped in validation_job_conditions.
-        if conditions and monitor.engine_dir is not None:
-            if not matrix.bind_child(conn, job_id, engine_job_id):
+        # A condition retest has no matrix engine job: every engine job is a child.
+        if conditions and (monitor.engine_dir is not None or condition_retest):
+            current = monitor.current_condition[-1] if condition_retest else None
+            if not matrix.bind_child(conn, job_id, engine_job_id, current):
                 logger.warning("orphan engine dir %s for job %s", engine_job_id, job_id)
                 raise JobInputError("ENGINE_BIND_FAILED")
             monitor.child_dirs.append(root / engine_job_id)
@@ -415,7 +430,7 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         asdict(result),
         org_id=report["org_id"],
         report_id=report["id"],
-        engine_dir=root / result.job_id,
+        engine_dir=root / result.job_id if result.job_id else None,
         retention_days=program["retention_days"],
         child_dirs=tuple(root / child for child in matrix.child_ids(conn, job_id)),
     )

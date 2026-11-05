@@ -191,7 +191,8 @@ async def test_summary_needs_attention_includes_actionable_reports(client, db_se
         job={"status": "inconclusive", "verdict": "inconclusive"},
         raw_report=blocked_run("PATH_EXCLUDED"),
     )
-    await with_result(db_session, world, job={"status": "failed", "error_code": "MODEL_INVALID_OUTPUT"})
+    unmapped = {"status": "failed", "error_code": "MODEL_INVALID_OUTPUT"}
+    await with_result(db_session, world, job=unmapped)
     response = await client.get(
         f"/api/v1/orgs/{world['org'].id}/report-summary", headers=world["dev_h"]
     )

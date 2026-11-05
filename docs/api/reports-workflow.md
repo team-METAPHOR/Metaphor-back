@@ -30,6 +30,7 @@
 ## 한도 대기 (`waiting_quota`)
 
 - 제보를 만들 때 프로그램의 일일 검증 실행 한도(`DAILY_LIMIT_EXCEEDED`)나 위젯 일일 상한(`WIDGET_DAILY_LIMITED`, 실행 한도의 절반)에 걸려도 거절하지 않습니다. 제보는 저장하고 검증 작업만 만들지 않습니다. 이것을 "주차"라고 부릅니다.
+- 단, 위젯 제보는 하루 저장 상한이 따로 있습니다. 위젯 일일 상한의 4배를 넘으면 429 `WIDGET_DAILY_LIMITED`로 거절합니다(익명 트래픽으로 저장 공간이 계속 쌓이지 않게). SDK는 이 코드를 받으면 다음 UTC 자정까지 보내지 않습니다.
 - 주차된 제보는 `reports.run_blocked = "quota"`(마이그레이션 0011)이고, `workflow_status`가 `received`이면 `progress`는 `waiting_quota`입니다. 감사 로그 `report.parked` `{reason: "quota", code}`가 남습니다(`code`는 걸린 한도).
 - 플랫폼 `POST /reports` 응답은 성공과 같은 201이지만 `validation_job_id: null`, `status: "waiting_quota"`입니다.
 - 위젯 `POST /widget/reports` 응답은 성공과 똑같은 201 `{receipt_id, status: "received", created_at}`입니다. 고객사가 한도를 넘었다는 사실을 익명 신고자에게 알리지 않습니다.

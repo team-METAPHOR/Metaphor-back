@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.v1.router import api_router
-from app.core.body_limit import body_limit_middleware
+from app.core.body_limit import BodyLimitMiddleware
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers, request_id_middleware
 from app.core.logging import configure_logging
@@ -31,7 +31,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 # Added last = outermost: request id wraps everything, including security headers.
-app.middleware("http")(body_limit_middleware)
+app.add_middleware(BodyLimitMiddleware)
 app.middleware("http")(widget_cors_middleware)
 app.middleware("http")(security_headers_middleware)
 app.middleware("http")(request_id_middleware)

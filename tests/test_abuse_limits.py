@@ -164,6 +164,23 @@ async def test_oversized_request_413_envelope(client):
     assert MAX_REQUEST_BYTES == 6 * 1024 * 1024
 
 
+async def test_chunked_oversized_request_413_envelope(client):
+    from app.core.body_limit import MAX_REQUEST_BYTES
+
+    async def chunks():
+        for _ in range(7):
+            yield b"x" * (1024 * 1024)
+
+    response = await client.post(
+        "/api/v1/auth/login", content=chunks(), headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 413
+    error = response.json()["error"]
+    assert error["code"] == "PAYLOAD_TOO_LARGE"
+    assert error["request_id"] == response.headers["X-Request-Id"]
+    assert 7 * 1024 * 1024 > MAX_REQUEST_BYTES
+
+
 def test_xff_from_untrusted_peer_warns_once_without_value(monkeypatch, caplog):
     from app.core import client_ip as module
 

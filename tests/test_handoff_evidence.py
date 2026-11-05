@@ -122,7 +122,7 @@ async def test_handoff_pending_while_job_active(client, world):
     assert (body["state"], body["job_id"], body["ai_generated"]) == (
         "pending",
         world["job_id"],
-        True,
+        False,
     )
     assert body["solutions"] == [] and body["summary"] is None
 
@@ -144,6 +144,9 @@ async def test_handoff_ready_maps_solutions(client, db_session, world):
         "confidence": "medium",
         "classification": "functional",
         "ai_generated": True,
+        # This fake result has neither `diagnosis` nor run evidence.
+        "diagnosis_state": "unavailable",
+        "diagnosis": None,
     }
     assert response.headers["content-type"].startswith("application/json")
 

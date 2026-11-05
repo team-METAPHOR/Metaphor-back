@@ -12,7 +12,8 @@ from app.integrations import storage
 from app.models import ValidationJob
 from app.repositories import artifacts as repo
 from app.repositories import validation_jobs as jobs_repo
-from app.schemas.evidence import ArtifactItem, ArtifactList, DeveloperHandoff
+from app.schemas.evidence import ArtifactItem, ArtifactList, DeveloperHandoff, Diagnosis
+from app.services import diagnosis as diagnosis_service
 from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.reports import load_visible_report
@@ -38,7 +39,12 @@ def _not_found() -> ApiError:
     return ApiError(404, "NOT_FOUND", "근거를 찾을 수 없습니다.")
 
 
-def _empty(state: str, job: ValidationJob | None) -> DeveloperHandoff:
+def _empty(
+    state: str,
+    job: ValidationJob | None,
+    diagnosis_state: str,
+    diagnosis: Diagnosis | None = None,
+) -> DeveloperHandoff:
     return DeveloperHandoff(
         state=state,
         job_id=job.id if job else None,
@@ -50,6 +56,9 @@ def _empty(state: str, job: ValidationJob | None) -> DeveloperHandoff:
         severity=None,
         confidence=None,
         classification=job.classification if job else None,
+        ai_generated=False,
+        diagnosis_state=diagnosis_state,
+        diagnosis=diagnosis,
     )
 
 
@@ -57,16 +66,23 @@ async def developer_handoff(db: AsyncSession, user_id: str, report_id: str) -> D
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
         job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
-        if job is None or job.status in ACTIVE:
-            return _empty("pending", job)
+        if job is None:
+            return _empty("pending", job, "not_run")
+        if job.status in ACTIVE:
+            return _empty("pending", job, "pending")
         if report.scrubbed_at is not None:
             # The retention purge deleted the raw result; say so instead of "unavailable".
-            return _empty("expired", job)
+            return _empty("expired", job, "expired")
         result = await jobs_repo.get_result(db, job.id)
-    analysis = ((result.raw if result else {}).get("report") or {}).get("analysis")
+    raw = result.raw if result else None
+    if raw is None:
+        no_result = "cancelled" if job.status == "cancelled" else "unavailable"
+        return _empty("unavailable", job, no_result)
+    diagnosis_state, diagnosis = diagnosis_service.build(job.status, raw)
+    analysis = (raw.get("report") or {}).get("analysis")
     if not analysis:
         # Never invent content when the engine produced no analysis.
-        return _empty("unavailable", job)
+        return _empty("unavailable", job, diagnosis_state, diagnosis)
     return DeveloperHandoff(
         state="ready",
         job_id=job.id,
@@ -78,6 +94,9 @@ async def developer_handoff(db: AsyncSession, user_id: str, report_id: str) -> D
         severity=analysis.get("severity"),
         confidence=analysis.get("confidence"),
         classification=analysis.get("classification") or job.classification,
+        ai_generated=True,
+        diagnosis_state=diagnosis_state,
+        diagnosis=diagnosis,
     )
 
 

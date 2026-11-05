@@ -187,3 +187,29 @@
 - `verdict`·`reason_code`: 엔진 판정(`report.run.verdict`)과 근거 코드(`SYMPTOM_OBSERVED_TWICE`, `SYMPTOM_NOT_OBSERVED_TWICE`, `ATTEMPTS_DISAGREE`, `ATTEMPT_BLOCKED`).
 - `summary`: AI 분석 요약(`report.analysis.summary`), `hypothesis`: 첫 번째 원인 가설(`report.analysis.hypotheses[0].description`). 분석이 없으면 `null`입니다.
 - 모델 출력이라 믿을 수 없는 데이터입니다. 다시 마스킹(`redact`)한 일반 텍스트이므로 HTML로 렌더링하지 말고 글자 그대로 보여주세요.
+
+## 개발자 인수인계 실행 진단 (`GET /reports/{report_id}/developer-handoff`)
+
+기존 AI 분석 필드(`state`, `summary` … `classification`)는 그대로 두고 `diagnosis_state`와
+`diagnosis`를 추가했습니다. `ai_generated`는 이제 AI 분석 필드에 모델 출력이 있을 때만 `true`입니다.
+
+- `diagnosis_state`: `not_run`(실행 없음) · `pending`(실행 중) · `cancelled`(취소, 결과 없음) ·
+  `available`(엔진 진단 있음) · `derived`(옛 엔진 결과라 `run.evidence`로 시도만 복원) ·
+  `unavailable`(결과나 증거 없음) · `expired`(보존 기간 만료). `available`/`derived`일 때만
+  `diagnosis`가 채워집니다.
+- `diagnosis.source = "execution"`: 결정적 실행 정보입니다. `outcome`은 `reproduced`,
+  `not_observed`(테스트한 조건에서 증상 미관찰, 버그 없음·수정 완료가 아님), `needs_information`,
+  `execution_failed`, `cancelled`, `inconclusive` 중 하나입니다. 그 밖에 `category`, `summary`,
+  `interpretation`, `reason_codes`, `root_cause_confirmed`(항상 `false`), `timings`가 있습니다.
+- `attempts[]`: `completed_steps`/`total_steps`, `failed_step_index`(0 기반), `next_step`
+  (`action`, `target`; 입력값은 내려주지 않고 URL은 쿼리·프래그먼트 제거), `blocker`, `ready`,
+  `expected_observed`, `symptom_observed`, `elapsed_seconds`, `evidence_ids`, `observation_ids`,
+  `timeline[]`(`stage`, `step_index`, `elapsed_seconds`), `video`(`status`, `start_offset_seconds`,
+  `duration_seconds`, `capture_error`; 파일 다운로드는 아직 없음).
+- `observed_facts[]`: 관찰된 4xx/5xx·차단 네트워크 응답(`method`, 쿼리 제거 `url`, `status`).
+- `next_actions[]`: 누가(`owner`: `reporter`/`operator`/`backend`/`developer`) 무엇을 보충할지
+  (`code`, `message`, `required_fields`, `retry_after_seconds`).
+- `missing_information`, `hypotheses`는 모델 출력이라 각각 `source: "ai"`를 달고, `hypotheses`는
+  `root_cause_confirmed: false`인 가설입니다.
+
+내부 파일 경로, 엔진 작업 ID, 영상 파일 이름, 세션 비밀 값은 응답에 포함하지 않습니다.

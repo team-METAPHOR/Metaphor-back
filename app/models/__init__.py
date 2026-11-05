@@ -3,6 +3,7 @@
 from app.models.artifact import Artifact
 from app.models.audit import AuditEvent, IdempotencyRecord
 from app.models.base import Base
+from app.models.evaluation import ReportEvalTag
 from app.models.identity import (
     Membership,
     Organization,
@@ -47,6 +48,7 @@ __all__ = [
     "QaResult",
     "Report",
     "ReportDuplicate",
+    "ReportEvalTag",
     "Session",
     "User",
     "ValidationJob",

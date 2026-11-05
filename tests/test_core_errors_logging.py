@@ -101,6 +101,14 @@ def test_filter_redacts_any_record():
     assert record.getMessage() == "key [REDACTED_KEY]"
 
 
+def test_filter_redacts_korean_pii():
+    record = logging.LogRecord(
+        "app.x", logging.INFO, __file__, 1, "phone %s", ("010-1234-5678",), None
+    )
+    RedactingFilter().filter(record)
+    assert record.getMessage() == "phone [REDACTED_PHONE]"
+
+
 def test_access_log_drops_query_string():
     args = ("1.2.3.4:5", "GET", "/api/v1/x?token=abc", "1.1", 200)
     record = logging.LogRecord(

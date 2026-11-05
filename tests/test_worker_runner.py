@@ -5,6 +5,7 @@ import time
 
 import psycopg
 import pytest
+from core_engine import QAResult
 from sqlalchemy import select
 
 from app.models import Artifact, JobEvent, ModelUsage, QaResult, ValidationJob
@@ -13,7 +14,7 @@ from app.services.reports import create_report
 from app.worker import queue, runner
 from tests.conftest import TEST_DATABASE_URL
 from tests.factories import make_org, make_program, make_user
-from tests.fakes import ScriptedModel, fake_run, intake
+from tests.fakes import ScriptedModel, completed_report, fake_run, intake
 from tests.test_core_intake import png
 
 SYNC_URL = TEST_DATABASE_URL.replace("+psycopg", "")
@@ -286,3 +287,79 @@ async def test_resume_runs_engine_with_answers(db_session, conn):
     assert resumed.engine_job_id not in (None, first.engine_job_id)
     sent = json.dumps(model.calls[0]["context"], ensure_ascii=False)
     assert "추가 답변" in sent and "cat은 결과가 있습니다" in sent
+
+
+PII = "연락처 010-1234-5678, 주민번호 900101-1234567"
+PII_CLEAN = "연락처 [REDACTED_PHONE], 주민번호 [REDACTED_RRN]"
+PLAN = {"steps": [{"action": "fill", "target": "#phone", "value": "010-1234-5678"}]}
+
+
+async def test_result_files_and_events_are_redacted(db_session, conn, monkeypatch):
+    import hashlib
+
+    from app.integrations import storage
+
+    _, job_id = await queued_job(db_session, conn)
+    seen = {}
+
+    async def run_with_pii(self, *args, **kwargs):
+        engine_id = self.store.create()
+        self.store.event(engine_id, "running", {"note": PII, "plan_sha256": "ab" * 32})
+        report = completed_report(engine_id)
+        report["title"] = PII
+        report["analysis"] = {"summary": PII, "solutions": [{"steps": [PII]}]}
+        report["plan_sha256"] = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        report["created_at"] = "2026-11-05T12:30:45.123456+00:00"
+        report["entry_url"] = "https://staging.example.com/search"
+        report["app_version"] = "v1.2.3"
+        seen.update(engine_id=engine_id, report=report)
+        result = QAResult(engine_id, "r", "p", "completed", report, (), None)
+        self.store.write_json(engine_id, "result.json", {"status": "completed", "report": report})
+        self.store.write_json(
+            engine_id,
+            "scenario.json",
+            {"report_id": "r", "plan": PLAN, "plan_sha256": "ab" * 32, "intake": {"title": PII}},
+        )
+        self.store.write_json(engine_id, "request.json", {"entry_url": "https://x/?q=1", "d": PII})
+        self.store.write(engine_id, "report.md", f"# 결과\n{PII}\n".encode())
+        self.store.event(engine_id, "completed")
+        return result
+
+    monkeypatch.setattr(runner.QAService, "run", run_with_pii)
+    await asyncio.to_thread(runner.execute_job, job_id, model=ScriptedModel([]))
+
+    engine_id = seen["engine_id"]
+    raw = (await db_session.get(QaResult, job_id)).raw
+    report = raw["report"]
+    assert report["title"] == PII_CLEAN
+    assert report["analysis"] == {"summary": PII_CLEAN, "solutions": [{"steps": [PII_CLEAN]}]}
+    assert report["job_id"] == engine_id and raw["job_id"] == engine_id
+    for key in ("plan_sha256", "created_at", "entry_url", "app_version", "classification"):
+        assert report[key] == seen["report"][key]
+    verdict = {"value": "reproduced", "reason_code": "SYMPTOM_OBSERVED_TWICE"}
+    assert report["run"]["verdict"] == verdict
+    assert raw["status"] == "completed"
+
+    arts = (await db_session.scalars(select(Artifact).where(Artifact.job_id == job_id))).all()
+    files = {}
+    for art in arts:
+        data = (storage.storage_root() / art.storage_key).read_bytes()
+        assert (art.sha256, art.size) == (hashlib.sha256(data).hexdigest(), len(data))
+        files[art.storage_key.rsplit("/", 1)[-1]] = data
+    assert "010-1234-5678" not in files["report.md"].decode()
+    assert PII_CLEAN in files["report.md"].decode()
+    result_json = json.loads(files["result.json"])
+    assert result_json["report"]["title"] == PII_CLEAN
+    assert result_json["report"]["plan_sha256"] == seen["report"]["plan_sha256"]
+    # The stored plan is an engine input (digest-checked on retest): only its text is untouched.
+    scenario = json.loads(files["scenario.json"])
+    assert scenario["plan"] == PLAN and scenario["plan_sha256"] == "ab" * 32
+    assert scenario["intake"] == {"title": PII_CLEAN}
+    # request.json is replayed by resume/retest as-is (its text was redacted at intake).
+    assert json.loads(files["request.json"])["entry_url"] == "https://x/?q=1"
+    events = json.loads(files["events.json"])
+    assert all("010-1234-5678" not in json.dumps(e, ensure_ascii=False) for e in events)
+
+    rows = (await db_session.scalars(select(JobEvent).where(JobEvent.job_id == job_id))).all()
+    running = next(r for r in rows if r.kind == "running")
+    assert running.detail == {"note": PII_CLEAN, "plan_sha256": "ab" * 32}

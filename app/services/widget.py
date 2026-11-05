@@ -7,14 +7,13 @@ import re
 from datetime import UTC
 from urllib.parse import urlsplit, urlunsplit
 
-from core_engine.redaction import redact_text
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import ApiError
-from app.core.text import sanitize_text
+from app.core.text import redact, sanitize_text
 from app.models import Program, ProgramScopeRevision, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
 from app.repositories import widget as repo
@@ -258,7 +257,7 @@ async def submit_report(
                 "운영 화면 스크린샷은 받지 않도록 설정되어 있습니다.",
             )
         target_url, query_stripped = check_target_url(revision, entry_url)
-        reported_url = redact_text(f"{origin}{_strip_query(page_path)}")
+        reported_url = redact(f"{origin}{_strip_query(page_path)}")
         context = _client_context(body, reported_url, query_stripped)
 
         async def create() -> tuple[int, dict]:

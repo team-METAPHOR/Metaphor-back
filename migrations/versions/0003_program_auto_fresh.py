@@ -1,6 +1,6 @@
 """program auto_fresh_retries
 
-Revision ID: 0004
+Revision ID: 0003
 Revises: 0002
 Create Date: 2026-11-05 00:00:00
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0004"
+revision: str = "0003"
 down_revision: str | Sequence[str] | None = "0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

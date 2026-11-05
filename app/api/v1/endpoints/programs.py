@@ -28,6 +28,7 @@ def _full(program: Program, revision: ProgramScopeRevision) -> ProgramResponse:
         external_ai_allowed=program.external_ai_allowed,
         daily_job_limit=program.daily_job_limit,
         retention_days=program.retention_days,
+        auto_fresh_retries=program.auto_fresh_retries,
         current_revision=program.current_revision,
         created_at=program.created_at,
         updated_at=program.updated_at,

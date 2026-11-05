@@ -16,7 +16,13 @@ from app.services.intake import run_policy
 # keep in sync with app.worker.resets.RESETS
 ALLOWED_RESET_ADAPTERS = ("stateless",)
 _APP_VERSION = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
-_PROGRAM_FIELDS = ("name", "status", "submission_mode", "external_ai_allowed")
+_PROGRAM_FIELDS = (
+    "name",
+    "status",
+    "submission_mode",
+    "external_ai_allowed",
+    "auto_fresh_retries",
+)
 
 
 def _not_found() -> ApiError:

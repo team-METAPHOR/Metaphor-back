@@ -24,6 +24,8 @@ SCOPE_FIELDS = (
 # selectors, each 1..256 chars. Anything wider would make every worker job fail.
 MAX_MASK_SELECTORS = 30
 MaskSelector = Annotated[str, Field(min_length=1, max_length=256)]
+# Automatic scenario regenerations per report after an inconclusive result.
+AutoFreshRetries = Annotated[int, Field(ge=0, le=2)]
 
 
 class _Strict(BaseModel):
@@ -40,6 +42,7 @@ class ProgramCreate(_Strict):
     status: Status = "draft"
     submission_mode: SubmissionMode = "invite_only"
     external_ai_allowed: bool = False
+    auto_fresh_retries: AutoFreshRetries = 1
     base_url: str = Field(max_length=2048)
     allowed_path_prefixes: list[str] = Field(max_length=50)
     excluded_path_prefixes: list[str] = Field(default=[], max_length=50)
@@ -57,6 +60,7 @@ class ProgramPatch(_Strict):
     status: Status | None = None
     submission_mode: SubmissionMode | None = None
     external_ai_allowed: bool | None = None
+    auto_fresh_retries: AutoFreshRetries | None = None
     base_url: str | None = Field(default=None, max_length=2048)
     allowed_path_prefixes: list[str] | None = Field(default=None, max_length=50)
     excluded_path_prefixes: list[str] | None = Field(default=None, max_length=50)
@@ -96,6 +100,7 @@ class ProgramResponse(BaseModel):
     external_ai_allowed: bool
     daily_job_limit: int
     retention_days: int
+    auto_fresh_retries: int
     current_revision: int
     scope: ScopeResponse
     created_at: datetime

@@ -38,6 +38,10 @@ MONITOR_INTERVAL = 1.0
 BASELINE_FILES = ("request.json", "scenario.json", "result.json")
 RESUME_FILES = ("request.json", "result.json")
 AUTH_MAX_AGE = 10.0
+# Same limit as core_engine QARequest.description.
+ENGINE_DESCRIPTION_LIMIT = 8000
+# Between the report text and an automatic fresh job's previous-attempt note.
+FRESH_NOTE_SEPARATOR = "\n\n"
 
 
 class JobInputError(Exception):
@@ -202,6 +206,17 @@ def _screenshot(artifact: dict | None) -> Screenshot | None:
     return Screenshot(path.read_bytes())
 
 
+def engine_description(job: dict, report: dict) -> str:
+    """Report text, plus (for an automatic fresh job) the previous-attempt note.
+
+    The report text comes first and is never cut; only the note is trimmed to the engine limit.
+    """
+    description = report["description"]
+    if job["kind"] == "fresh" and job["answers"]:
+        description += FRESH_NOTE_SEPARATOR + job["answers"]
+    return description[:ENGINE_DESCRIPTION_LIMIT]
+
+
 async def _call_engine(service: QAService, data: dict, reset, monitor: Monitor):
     job, report = data["job"], data["report"]
     callbacks = {
@@ -218,7 +233,7 @@ async def _call_engine(service: QAService, data: dict, reset, monitor: Monitor):
         program_id=report["program_id"],
         entry_url=report["target_url"],
         screenshot=_screenshot(data["artifact"]),
-        description=report["description"],
+        description=engine_description(job, report),
         expected_result=report["expected_result"],
         test_data=report["test_data"],
     )
@@ -288,7 +303,7 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         finally:
             monitor.stop.set()
             monitor.join(5)
-    persist_result(
+    persisted = persist_result(
         conn,
         job_id,
         asdict(result),
@@ -297,6 +312,37 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         engine_dir=root / result.job_id,
         retention_days=program["retention_days"],
     )
+    if persisted and result.status == "inconclusive":
+        _run_auto_fresh(job_id)
+
+
+async def _auto_fresh(job_id: str) -> str | None:
+    # Own engine per call: asyncio.run gives each call a new loop, and pooled async
+    # connections can't cross loops.
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import get_settings
+    from app.services import rerun
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            return await rerun.auto_fresh(session, job_id)
+    finally:
+        await engine.dispose()
+
+
+def _run_auto_fresh(job_id: str) -> None:
+    """Queue the automatic scenario regeneration. Never affects the finished job's result."""
+    try:
+        fresh_id = asyncio.run(_auto_fresh(job_id))
+    except Exception as error:
+        # Type only: messages/tracebacks can carry SQL parameters with report text.
+        logger.warning("auto fresh skipped for job %s: %s", job_id, type(error).__name__)
+        return
+    if fresh_id:
+        logger.info("auto fresh job %s queued after %s", fresh_id, job_id)
 
 
 def run_job(job_id: str) -> None:

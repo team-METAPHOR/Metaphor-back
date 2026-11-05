@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ARRAY, Boolean, Integer, String, Text, text
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -21,6 +21,7 @@ class Program(Base):
     __table_args__ = (
         one_of("status", PROGRAM_STATUSES, "status"),
         one_of("submission_mode", SUBMISSION_MODES, "submission_mode"),
+        CheckConstraint("auto_fresh_retries BETWEEN 0 AND 2", name="auto_fresh_retries"),
     )
 
     id: Mapped[str] = id_pk()
@@ -32,6 +33,8 @@ class Program(Base):
     external_ai_allowed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     daily_job_limit: Mapped[int] = mapped_column(Integer, server_default="50")
     retention_days: Mapped[int] = mapped_column(Integer, server_default="30")
+    # Automatic `fresh` jobs (scenario regenerated) allowed per report after an inconclusive run.
+    auto_fresh_retries: Mapped[int] = mapped_column(Integer, server_default="1")
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()
 

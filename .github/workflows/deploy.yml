@@ -53,6 +53,7 @@ jobs:
             --exclude='.git/' \
             --exclude='.venv/' \
             --exclude='.env' \
+            --exclude='.env.worker' \
             --exclude='var/' \
             --exclude='__pycache__/' \
             --exclude='*.pyc' \
@@ -67,10 +68,19 @@ jobs:
           set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
           cd /home/ubuntu/metaphor-back
-          uv sync --locked
+          uv sync --locked --group worker
           # Schema first: new code may need columns from the new revision.
           uv run alembic upgrade head
           sudo /usr/bin/systemctl restart metaphor-back.service
+          if systemctl list-unit-files metaphor-worker.service --no-legend | grep -q '^metaphor-worker.service'; then
+            sudo /usr/bin/systemctl restart metaphor-worker.service
+            # Type=exec only confirms exec succeeded. Give startup checks time to finish.
+            sleep 25
+            systemctl is-active --quiet metaphor-worker.service
+            test "$(systemctl show metaphor-worker.service -p NRestarts --value)" = "0"
+          else
+            echo 'Worker unit is not installed; follow docs/deploy.md for one-time setup.'
+          fi
           REMOTE
 
       - name: Health check

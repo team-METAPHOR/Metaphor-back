@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
+from threading import Event
 
 import psycopg
 
@@ -86,16 +87,19 @@ def supervise(
     return process
 
 
-def run_forever(target: Callable[[str], None], *, idle_seconds: float = 1.0) -> None:
+def run_forever(
+    target: Callable[[str], None], *, idle_seconds: float = 1.0, stop_event: Event | None = None
+) -> None:
     """ponytail: one job at a time per worker process; scale by running more workers."""
     settings = get_settings()
+    stop_event = stop_event if stop_event is not None else Event()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     with psycopg.connect(sync_database_url(), autocommit=True) as conn:
-        while True:
+        while not stop_event.is_set():
             queue.reap_expired(conn)
             job_id = queue.claim_next(conn, worker_id, lease_seconds=settings.lease_seconds)
             if job_id is None:
-                time.sleep(idle_seconds)
+                stop_event.wait(idle_seconds)
                 continue
             supervise(
                 conn,
@@ -107,10 +111,29 @@ def run_forever(target: Callable[[str], None], *, idle_seconds: float = 1.0) -> 
             )
 
 
-if __name__ == "__main__":
+def main() -> int:
     from app.core.logging import configure_logging
-    from app.worker.runner import check_video_encoder, run_job
+    from app.worker.runner import run_job
+    from app.worker.startup import WorkerStartupError, check_startup
 
     configure_logging()
-    check_video_encoder()
-    run_forever(run_job)
+    logging.getLogger().setLevel(logging.INFO)
+    stop = Event()
+
+    def request_stop(signum, frame):
+        logger.info("WORKER_STOP_REQUESTED")
+        stop.set()
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    try:
+        check_startup()
+    except WorkerStartupError:
+        return 1
+    run_forever(run_job, stop_event=stop)
+    logger.info("WORKER_STOPPED")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

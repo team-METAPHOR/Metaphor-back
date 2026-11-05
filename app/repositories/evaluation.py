@@ -8,6 +8,7 @@ from app.models import (
     AuditEvent,
     JobEvent,
     QaResult,
+    Report,
     ReportEvalTag,
     ValidationJob,
     ValidationJobCondition,
@@ -112,3 +113,16 @@ async def automatic_job_ids(db: AsyncSession, job_ids: list[str], action: str) -
         select(AuditEvent.target).where(AuditEvent.action == action, AuditEvent.target.in_(job_ids))
     )
     return set(rows)
+
+
+async def run_reports(
+    db: AsyncSession, org_id: str, eval_run_id: str, limit: int
+) -> list[tuple[Report, ReportEvalTag]]:
+    rows = await db.execute(
+        select(Report, ReportEvalTag)
+        .join(ReportEvalTag, ReportEvalTag.report_id == Report.id)
+        .where(ReportEvalTag.org_id == org_id, ReportEvalTag.eval_run_id == eval_run_id)
+        .order_by(ReportEvalTag.case_id, ReportEvalTag.repeat_id)
+        .limit(limit)
+    )
+    return [(report, tag) for report, tag in rows]

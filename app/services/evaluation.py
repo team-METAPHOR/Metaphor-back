@@ -1,7 +1,10 @@
 """Evaluation bookkeeping (issue #105). Tags are evaluator-only metadata: nothing here is ever
 read by the worker or copied into report text, engine input or report views."""
 
-from datetime import datetime
+import csv
+import io
+from datetime import UTC, datetime
+from typing import get_args
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,14 +15,17 @@ from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import evaluation as repo
 from app.schemas.evaluation import (
     EvalCondition,
+    EvalExport,
     EvalJob,
     EvalModelCall,
     EvalRecord,
     EvalTag,
     EvalTagUpdate,
     EvalTiming,
+    EvalTotals,
+    Outcome,
 )
-from app.services.access import WRITE_ROLES, org_role
+from app.services.access import READ_ROLES, WRITE_ROLES, org_role, require_org_role
 from app.services.audit import record_audit
 from app.services.reports import load_visible_report
 from app.services.rerun import AUTO_FRESH_ACTION
@@ -241,6 +247,11 @@ async def build_records(
                 error_code=job.error_code,
                 backend_error_code=job.backend_error_code,
                 error_codes=job_error_codes(job, job_parts, calls),
+                browser_attempts=len(
+                    [e for e in job_parts.get("evidence") or [] if isinstance(e, dict)]
+                    if isinstance(job_parts.get("evidence"), list)
+                    else []
+                ),
                 result_available=job.id in parts,
                 report_md_available=job.id in with_md,
                 plan_review=(
@@ -299,3 +310,161 @@ async def get_eval_record(db: AsyncSession, user_id: str, report_id: str) -> Eva
         tags = await repo.tags_for(db, [report.id])
         (record,) = await build_records(db, [report], tags)
         return record
+
+
+MAX_EXPORT_REPORTS = 2000
+
+
+def _totals(items: list[EvalRecord]) -> EvalTotals:
+    jobs = [job for item in items for job in item.jobs]
+    calls = [call for job in jobs for call in job.model_calls]
+    outcomes = {value: 0 for value in get_args(Outcome)}
+    for item in items:
+        outcomes[item.outcome] += 1
+    return EvalTotals(
+        reports=len(items),
+        duplicate_submissions=sum(item.duplicate_submissions for item in items),
+        qa_jobs=sum(item.qa_jobs for item in items),
+        retests=sum(item.retests for item in items),
+        model_calls=len(calls),
+        model_calls_usage_unknown=sum(not call.usage_known for call in calls),
+        browser_attempts=sum(job.browser_attempts for job in jobs),
+        report_files=sum(job.report_md_available for job in jobs),
+        outcomes=outcomes,
+    )
+
+
+async def export_run(db: AsyncSession, user_id: str, org_id: str, eval_run_id: str) -> EvalExport:
+    """Every report tagged with `eval_run_id` in the org, whatever its state (success, failure,
+    pending, cancelled, not run). Sorted by case, repeat. An unknown run is an empty export."""
+    async with db.begin():
+        await require_org_role(db, user_id, org_id, *READ_ROLES)
+        rows = await repo.run_reports(db, org_id, eval_run_id, MAX_EXPORT_REPORTS + 1)
+        if len(rows) > MAX_EXPORT_REPORTS:
+            raise ApiError(
+                422, "EVAL_RUN_TOO_LARGE", "평가 실행 하나의 제보가 너무 많아 내보낼 수 없습니다."
+            )
+        items = await build_records(
+            db, [report for report, _ in rows], {tag.report_id: tag for _, tag in rows}
+        )
+    return EvalExport(
+        eval_run_id=eval_run_id, generated_at=datetime.now(UTC), totals=_totals(items), items=items
+    )
+
+
+CSV_COLUMNS = (
+    "eval_run_id",
+    "case_id",
+    "repeat_id",
+    "report_id",
+    "report_number",
+    "program_id",
+    "source",
+    "received_at",
+    "outcome",
+    "verdict",
+    "final_job_id",
+    "final_status",
+    "report_ready_at",
+    "processing_ms",
+    "ended_at",
+    "ended_ms",
+    "qa_jobs",
+    "retries",
+    "retests",
+    "duplicate_submissions",
+    "run_blocked",
+    "error_codes",
+    "model_calls",
+    "failed_model_calls",
+    "usage_unknown_calls",
+    "input_tokens",
+    "output_tokens",
+    "models",
+    "critic_enabled",
+    "queue_wait_ms",
+    "setup_ms",
+    "engine_ms",
+    "model_ms",
+    "browser_ms",
+    "persist_ms",
+    "browser_attempts",
+    "report_url",
+)
+
+
+def csv_cell(value) -> str:
+    """Plain text cell; a string that a spreadsheet would run as a formula is quoted."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _sum_known(values: list[int | None]) -> int | None:
+    """Token sum over calls that reported usage; None when none did (unknown, not zero)."""
+    known = [value for value in values if value is not None]
+    return sum(known) if known else None
+
+
+def csv_row(item: EvalRecord) -> dict:
+    qa = [job for job in item.jobs if job.kind in QA_KINDS]
+    calls = [call for job in qa for call in job.model_calls]
+    # Per-job spans of the job that decided the outcome (first completed, else the last QA job).
+    decisive = next((job for job in qa if job.status == "completed"), qa[-1] if qa else None)
+    timing = decisive.timing if decisive else None
+    review = (decisive.plan_review or {}) if decisive else {}
+    return {
+        "eval_run_id": item.eval.eval_run_id if item.eval else None,
+        "case_id": item.eval.case_id if item.eval else None,
+        "repeat_id": item.eval.repeat_id if item.eval else None,
+        "report_id": item.report_id,
+        "report_number": item.report_number,
+        "program_id": item.program_id,
+        "source": item.source,
+        "received_at": item.received_at,
+        "outcome": item.outcome,
+        "verdict": item.verdict,
+        "final_job_id": item.final_job_id,
+        "final_status": item.final_status,
+        "report_ready_at": item.report_ready_at,
+        "processing_ms": item.processing_ms,
+        "ended_at": item.ended_at,
+        "ended_ms": item.ended_ms,
+        "qa_jobs": item.qa_jobs,
+        "retries": item.retries,
+        "retests": item.retests,
+        "duplicate_submissions": item.duplicate_submissions,
+        "run_blocked": item.run_blocked,
+        "error_codes": "|".join(item.error_codes),
+        "model_calls": len(calls),
+        "failed_model_calls": sum(c.status not in ("completed", None) for c in calls),
+        "usage_unknown_calls": sum(not c.usage_known for c in calls),
+        "input_tokens": _sum_known([c.input_tokens for c in calls]),
+        "output_tokens": _sum_known([c.output_tokens for c in calls]),
+        "models": "|".join(_ordered(c.model for c in calls)),
+        "critic_enabled": review.get("enabled"),
+        "queue_wait_ms": timing.queue_wait_ms if timing else None,
+        "setup_ms": timing.setup_ms if timing else None,
+        "engine_ms": timing.engine_ms if timing else None,
+        "model_ms": timing.model_ms if timing else None,
+        "browser_ms": timing.browser_ms if timing else None,
+        "persist_ms": timing.persist_ms if timing else None,
+        "browser_attempts": sum(job.browser_attempts for job in qa),
+        "report_url": item.report_url,
+    }
+
+
+def export_csv(export: EvalExport) -> str:
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    for item in export.items:
+        writer.writerow({key: csv_cell(value) for key, value in csv_row(item).items()})
+    return out.getvalue()

@@ -72,3 +72,13 @@ QA 작업은 `initial`·`fresh`·`resume`입니다. 수정 재검증(`retest`)�
 - `jobs[].model_calls[]`: `phase`, `role`(primary/critic), `status`, `model`(공급자가 돌려준 실제 모델 ID, 실패 시 `null`), `configured_model`(워커 설정 모델 ID, 준비 확인 스냅샷이 붙기 전까지 `null`), `usage_known`, `input_tokens`/`output_tokens`(사용량이 없으면 `null`, 0으로 취급하지 않음), `latency_ms`, `retry_after_seconds`(429의 Retry-After).
 - `plan_review`는 `{enabled, status, error_code}`만 보여 줍니다. 비판 모델 사용 여부는 이 `enabled`로 확인합니다.
 - 엔진 job id, 저장 경로, 범위 스냅샷, 모델 요청·응답 본문은 넣지 않습니다. 정제된 JSON 결과는 `result_url`, 증거 목록은 `artifacts_url`로 받습니다.
+
+## 평가 실행 내보내기
+
+`GET /orgs/{org_id}/eval-runs/{eval_run_id}/export` (구성원, `?format=json` 기본 / `?format=csv`)
+
+- 그 회사에서 `eval_run_id` 태그가 붙은 제보를 **상태와 관계없이 모두** 넣습니다: 성공, 실패, 시간 초과, 보류(`needs_info`·`inconclusive`), 취소, 진행 중(`unfinished`), 미실행(`not_run`). 슬롯 하나당 한 행이고 `case_id`, `repeat_id` 순으로 정렬합니다.
+- 없는 실행 id는 빈 결과(200)입니다. 회사 구성원이 아니면 404, 실행 id 형식이 틀리면 422. 한 실행에 제보가 2000건을 넘으면 422 `EVAL_RUN_TOO_LARGE`.
+- JSON: `{eval_run_id, generated_at, totals, items}`. `items[]`는 위 제보별 평가 기록과 같습니다. `totals`는 제보 수, 중복 접수 수, QA 작업 수, 재검증 수, 모델 호출 수(사용량 unknown 수 포함), 브라우저 시도 수, `report.md`가 저장된 작업 수(`report_files`), 결과별 건수입니다. 신고 건수·모델 호출 수·브라우저 시도 수·보고서 수를 따로 다시 셀 수 있습니다.
+- CSV: 제보당 한 행. 시간 구간 열(`queue_wait_ms` 등)은 결과를 정한 작업(처음 완료된 QA 작업, 없으면 마지막 QA 작업) 기준입니다. `input_tokens`/`output_tokens`는 사용량을 보고한 호출만 더하고, 보고한 호출이 없으면 빈 칸(0이 아님)이며 `usage_unknown_calls`로 빠진 수를 셉니다. 여러 값은 `|`로 잇습니다. `=`·`+`·`-`·`@`로 시작하는 문자열 셀은 스프레드시트 수식으로 실행되지 않게 앞에 `'`를 붙입니다.
+- 계정·비밀번호·세션·토큰, 모델 요청·응답 본문, 엔진 job id, 저장 경로는 넣지 않습니다. 보고서와 증거는 `report_url`·`jobs[].result_url`·`jobs[].artifacts_url` 링크로만 연결하며, 받으려면 같은 권한 검사를 다시 거칩니다.

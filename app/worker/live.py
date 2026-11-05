@@ -128,7 +128,7 @@ def delete(conn: psycopg.Connection, job_id: str) -> bool:
 
 def sweep(conn: psycopg.Connection, stale_seconds: int = STALE_SECONDS) -> int:
     """TTL cleanup: rows of jobs no longer running, or whose relay stopped heartbeating."""
-    rows = conn.execute(
+    cursor = conn.execute(
         """
         WITH d AS (
             DELETE FROM live_previews l USING validation_jobs j
@@ -140,8 +140,8 @@ def sweep(conn: psycopg.Connection, stale_seconds: int = STALE_SECONDS) -> int:
         SELECT pg_notify('live_preview', job_id) FROM d
         """,
         (stale_seconds,),
-    ).fetchall()
-    return len(rows)
+    )
+    return cursor.rowcount  # one pg_notify row per deleted preview
 
 
 def safe_delete(conn: psycopg.Connection, job_id: str) -> None:

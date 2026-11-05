@@ -27,6 +27,7 @@ from core_engine import (
     LoginOptions,
     OpenAIModel,
     PolicyError,
+    QALimits,
     QARequest,
     QAService,
     RunPolicy,
@@ -201,6 +202,11 @@ def build_policy(snapshot: dict) -> RunPolicy:
 # Engine browser budget at its ceilings. The engine default (2 concurrent, 60 total) aborts an
 # attempt as soon as a normal SPA loads its HTML, JS and CSS in parallel (CONCURRENCY_LIMIT).
 # ponytail: ceilings are fixed by the engine; waiting instead of failing needs an engine change.
+# Model budget per job at the engine ceiling for tokens. The default 40,000 is used up by intake +
+# plan on a busy page with reporter activity, so plan revision is refused (MODEL_TOKEN_LIMIT) before
+# any browser attempt. ponytail: fixed ceiling; make it per-program config if cost needs tuning.
+QA_LIMITS = QALimits(max_reported_tokens=100_000)
+
 BROWSER_LIMITS = BudgetLimits(
     max_runtime_seconds=120,
     max_requests_per_minute=120,
@@ -234,7 +240,13 @@ def build_service(
         else None,
     )
     return QAService(
-        model, policy, store, options=options, reviewer=reviewer, browser_limits=BROWSER_LIMITS
+        model,
+        policy,
+        store,
+        options=options,
+        reviewer=reviewer,
+        limits=QA_LIMITS,
+        browser_limits=BROWSER_LIMITS,
     )
 
 
@@ -519,6 +531,7 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
             ),
             reviewer=reviewer,
             limits=ConditionLimits(max_conditions=snapshot["max_conditions"]),
+            qa_limits=QA_LIMITS,
             browser_limits=BROWSER_LIMITS,
         )
         contexts = sorted({c["test_context_id"] for c in conditions})

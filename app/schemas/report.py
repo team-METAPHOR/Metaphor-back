@@ -82,6 +82,21 @@ class ReportItem(BaseModel):
     created_at: datetime
 
 
+class RequiredAction(BaseModel):
+    code: str
+    message: str
+
+
+class BestAttempt(BaseModel):
+    """Latest finished job's stored engine result, as redacted plain text (never HTML)."""
+
+    job_id: str
+    verdict: str | None
+    reason_code: str | None
+    summary: str | None
+    hypothesis: str | None
+
+
 class ReportList(BaseModel):
     """Cursor mode (`cursor` given): `total`/`page` are null. Otherwise page mode: `page` is
     the 1-based page and `total` the number of matching reports. `next_cursor` is always set
@@ -98,13 +113,15 @@ class AttentionItem(BaseModel):
     number: int
     title: str
     progress: Progress
+    # First required action, or null (e.g. reproduced and only needs review).
+    reason: RequiredAction | None = None
 
 
 class ReportSummary(BaseModel):
     """All of the org's reports (closed included), counted by `progress`; every value is
     present, zero when none. `needs_attention`: newest 5 reports that are reproduced, parked
-    over the quota (waiting_quota), or whose latest job waits for an answer (needs_info) while
-    still `received`."""
+    over the quota (waiting_quota), or still `received` with a required action from the latest
+    finished job (see `required_actions`)."""
 
     counts: dict[str, int]
     needs_attention: list[AttentionItem]
@@ -135,6 +152,8 @@ class ReportDetail(ReportItem):
     client_context: dict | None = None
     # True once the retention purge blanked the text fields (they read as "").
     scrubbed: bool = False
+    required_actions: list[RequiredAction] = []
+    best_attempt: BestAttempt | None = None
 
 
 class WorkflowUpdate(BaseModel):

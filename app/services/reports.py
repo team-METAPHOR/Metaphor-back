@@ -44,6 +44,13 @@ from app.services.intake import (
 )
 from app.services.jobs import create_job
 from app.services.limits import enforce_rate_limit, lock_key, since
+from app.services.report_actions import (
+    actionable_sql,
+    best_attempt,
+    derive_actions,
+    load_result,
+    origin_verified,
+)
 
 # Platform reports per user per hour (widget reports have their own limits).
 REPORT_HOURLY_LIMIT = 20
@@ -420,11 +427,11 @@ ATTENTION_LIMIT = 5
 
 
 def needs_attention_sql() -> ColumnElement:
-    """Reproduced, parked over the daily quota, or still `received` with the latest job
-    waiting for an answer."""
+    """Reproduced, parked over the daily quota, or still `received` with a job-derived
+    required action."""
     return or_(
         report_progress_sql().in_(("reproduced", "waiting_quota")),
-        and_(Report.workflow_status == "received", ValidationJob.status == "needs_info"),
+        and_(Report.workflow_status == "received", actionable_sql()),
     )
 
 
@@ -436,19 +443,27 @@ async def report_summary(db: AsyncSession, user_id: str, org_id: str) -> ReportS
             db, org_id, needs_attention_sql(), ATTENTION_LIMIT
         )
         verified = await reports_repo.fix_verified_ids(db, [report.id for report, _ in rows])
-    return ReportSummary(
-        counts={value: counts.get(value, 0) for value in PROGRESS_VALUES},
-        needs_attention=[
-            AttentionItem(
-                id=report.id,
-                number=report.number,
-                title=report.title,
-                progress=report_progress(
-                    report.workflow_status, job, report.id in verified, report.run_blocked
-                ),
+        items = []
+        for report, job in rows:
+            actions = derive_actions(
+                report.workflow_status,
+                job,
+                await load_result(db, job),
+                run_blocked=report.run_blocked,
             )
-            for report, job in rows
-        ],
+            items.append(
+                AttentionItem(
+                    id=report.id,
+                    number=report.number,
+                    title=report.title,
+                    progress=report_progress(
+                        report.workflow_status, job, report.id in verified, report.run_blocked
+                    ),
+                    reason=actions[0] if actions else None,
+                )
+            )
+    return ReportSummary(
+        counts={value: counts.get(value, 0) for value in PROGRESS_VALUES}, needs_attention=items
     )
 
 
@@ -497,6 +512,9 @@ async def get_report_by_number(
 async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
     assignee = await reports_repo.get_assignee(db, report.id) if report.assignee_id else None
+    raw = await load_result(db, job)
+    open_ = report.workflow_status not in ("closed", "dismissed")
+    origin_ok = await origin_verified(db, report.program_id) if open_ else True
     verified = report.id in await reports_repo.fix_verified_ids(db, [report.id])
     return ReportDetail(
         **_item(report, job, *(assignee or ()), fix_verified=verified),
@@ -508,6 +526,14 @@ async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
         input_artifact_id=report.input_artifact_id,
         client_context=report.client_context,
         scrubbed=report.scrubbed_at is not None,
+        required_actions=derive_actions(
+            report.workflow_status,
+            job,
+            raw,
+            origin_verified=origin_ok,
+            run_blocked=report.run_blocked,
+        ),
+        best_attempt=best_attempt(job, raw),
     )
 
 

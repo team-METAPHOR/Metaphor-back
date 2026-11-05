@@ -112,12 +112,13 @@
 {
   "counts": {"new": 3, "reproducing": 1, "reproduced": 4, "triaged": 2, "verified": 1,
              "waiting_quota": 2, "fixing": 1, "dismissed": 0, "closed": 5},
-  "needs_attention": [{"id": "…", "number": 12, "title": "…", "progress": "reproduced"}]
+  "needs_attention": [{"id": "…", "number": 12, "title": "…", "progress": "triaged",
+                       "reason": {"code": "ANSWER_QUESTIONS", "message": "추가 질문에 답하면 다시 검증합니다"}}]
 }
 ```
 
 - `counts`: 회사의 모든 제보(마감 포함)를 `progress`별로 셉니다. 모든 값이 키로 있고 없으면 0입니다. "재현 완료" 카드는 `reproduced + triaged`, "재현 중"은 `reproducing`, "신규"는 `new + waiting_quota`, "수정 확인됨"은 `verified`입니다.
-- `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`나 `waiting_quota`(한도 대기로 주차됨)이거나, 처리 상태가 `received`이고 최신 작업이 `needs_info`(질문에 답해야 함)인 제보입니다. 항목의 `progress`도 목록과 같은 규칙(`fix_verified`, `run_blocked` 포함)으로 계산합니다.
+- `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`나 `waiting_quota`(한도 대기로 주차됨)이거나, 처리 상태가 `received`이고 끝난 최신 작업에서 아래 `required_actions`가 나오는 제보입니다(`needs_info`, 매핑된 오류·차단 코드). 항목의 `progress`도 목록과 같은 규칙(`fix_verified`, `run_blocked` 포함)으로 계산합니다. `reason`은 첫 번째 필요 조치 `{code, message}`이고(주차된 제보는 `WAIT_FOR_QUOTA`), 재현 완료라 검토만 남은 경우 `null`입니다.
 
 ## 회사 재현 통계 (`GET /orgs/{org_id}/report-stats?days=7`)
 
@@ -131,3 +132,35 @@
 | `by_page` | 기간 안 제보의 페이지 경로 상위 10개 `[{path, count}]`(많은 순, 같으면 경로순). 위젯 `client_context.reported_url`, 없으면 `target_url`의 경로(쿼리·프래그먼트 제외). |
 
 "끝난"은 `completed` / `inconclusive` / `needs_info` / `failed`이고, `cancelled`는 재현 시도로 보지 않아 뺍니다.
+
+## 필요 조치 (`required_actions`)와 최근 시도 요약 (`best_attempt`)
+
+제보 상세(`GET /reports/{id}`, `GET /orgs/{org_id}/reports/{number}`)에 들어갑니다. 기준 코드는 `app/services/report_actions.py`입니다.
+
+`required_actions: [{code, message}]` — 사람이 무엇을 해야 다음으로 넘어가는지 알려줍니다.
+
+- `closed`·`dismissed` 제보는 항상 `[]`입니다.
+- 작업 기반 조치는 **끝난** 최신 작업에서만 나옵니다. 작업이 진행 중이면 이전 시도의 조치는 보여주지 않습니다.
+- 작업의 `backend_error_code`, `error_code`, 저장된 결과의 시도별 차단 코드(`report.run.evidence[].blocker`)를 봅니다. 표에 없는 코드는 조치를 만들지 않습니다(빈 목록).
+- 순서는 아래 표 순서이고, 같은 조치는 한 번만 나옵니다.
+
+| `code` | `message` | 나오는 조건 |
+|---|---|---|
+| `VERIFY_ORIGIN` | 테스트 대상 도메인의 소유 확인이 필요합니다 | 프로그램 현재 범위의 origin이 소유 확인되지 않음(새 작업이 `ORIGIN_NOT_VERIFIED`로 막힘) |
+| `WAIT_FOR_QUOTA` | 오늘 실행 한도에 도달해 한도가 풀리면 다시 시도합니다 | 제보의 `run_blocked == "quota"`(한도 대기로 주차되어 아직 작업이 없음) |
+| `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류) |
+| `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
+| `ANSWER_QUESTIONS` | 추가 질문에 답하면 다시 검증합니다 | 최신 작업 상태가 `needs_info` |
+
+엔진에는 로그인 화면을 따로 알려주는 코드가 없습니다. 로그인이 필요한 페이지가 4xx로 답하면 `NAVIGATION_FAILED` → `CHECK_TARGET_URL`로 보입니다.
+
+`best_attempt` — 끝난 최신 작업의 저장된 엔진 결과(`qa_results`)가 있을 때만 객체이고, 없으면(작업 없음·진행 중·보존 기간 삭제) `null`입니다.
+
+```json
+{"job_id": "…", "verdict": "reproduced", "reason_code": "SYMPTOM_OBSERVED_TWICE",
+ "summary": "…", "hypothesis": "…"}
+```
+
+- `verdict`·`reason_code`: 엔진 판정(`report.run.verdict`)과 근거 코드(`SYMPTOM_OBSERVED_TWICE`, `SYMPTOM_NOT_OBSERVED_TWICE`, `ATTEMPTS_DISAGREE`, `ATTEMPT_BLOCKED`).
+- `summary`: AI 분석 요약(`report.analysis.summary`), `hypothesis`: 첫 번째 원인 가설(`report.analysis.hypotheses[0].description`). 분석이 없으면 `null`입니다.
+- 모델 출력이라 믿을 수 없는 데이터입니다. 다시 마스킹(`redact`)한 일반 텍스트이므로 HTML로 렌더링하지 말고 글자 그대로 보여주세요.

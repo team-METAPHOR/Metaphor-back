@@ -78,8 +78,9 @@ Core_engine `docs/browser-request-policy.md`.
 | `RESET_ACCOUNT_MISSING` | 계정별 초기화인데 저장된 테스트 계정(로그인 경로·성공 신호 포함)이 없음 |
 | `RESET_TOKEN_MISSING` | 워커에 어댑터 토큰 환경변수가 없음 |
 | `RESET_TARGET_NOT_APPROVED` | `base_url` 원점이 어댑터의 승인 HTTPS 원점 목록에 없음(토큰을 보내지 않음) |
+| `RESET_ACCOUNT_NOT_APPROVED` | 테스트 계정이 어댑터의 승인 계정 목록에 없음(토큰을 보내지 않음) |
 
-같은 초기화 대상 계정을 쓰는 작업은 프로그램·조직·테스트 문맥이 달라도 한 번에 하나만 실행합니다(어댑터·원점·계정 해시 기준 advisory lock). 서로 다른 계정이면 병렬로 실행됩니다.
+상태 초기화 어댑터(프로그램 또는 조건)를 쓰는 작업은 쓰기 승인 여부와 관계없이, 같은 초기화 대상 계정이면 프로그램·조직·테스트 문맥이 달라도 한 번에 하나만 실행합니다(어댑터·정규화된 원점·계정 해시 기준 advisory lock). 서로 다른 계정이면 병렬로 실행됩니다.
 
 ## `buglab-v1` 어댑터 (BugLab Shop dev)
 
@@ -87,9 +88,9 @@ Core_engine `docs/browser-request-policy.md`.
 응답이 200이고 같은 이메일, 빈 장바구니(`cart.items == []`), 적용 쿠폰 없음(`cart.appliedCoupons == []`)일 때만 성공입니다. 그 외 상태 코드·형식·네트워크 오류는 모두 실패(`False`)입니다.
 BugLab은 이 호출로 해당 계정의 장바구니·쿠폰·찜·세션·로그인 실패 기록을 지웁니다.
 
-- 워커 전용 환경변수: `QA_RESET_BUGLAB_TOKEN`(토큰), `QA_RESET_BUGLAB_ORIGINS`(토큰을 보낼 수 있는 정확한 HTTPS 원점, 쉼표 구분). API 프로세스에는 두지 않습니다.
+- 워커 전용 환경변수: `QA_RESET_BUGLAB_TOKEN`(토큰), `QA_RESET_BUGLAB_ORIGINS`(토큰을 보낼 수 있는 정확한 HTTPS 원점, 쉼표 구분), `QA_RESET_BUGLAB_ACCOUNTS`(초기화할 수 있는 테스트 계정 이메일 또는 `@도메인`, 쉼표 구분). API 프로세스에는 두지 않습니다.
 - HTTPS 인증서 검증, 리다이렉트·프록시 미사용, 10초 제한. 토큰·계정·URL은 로그·결과·이벤트에 남기지 않고, 브라우저 계획·모델 입력에도 넣지 않습니다. 브라우저 쪽 `/api/test`는 범위에서 제외하고 쓰기 승인도 거절합니다.
-- 고객 관리자가 어댑터 이름을 고를 수 있으므로 토큰 대상 원점은 운영자 환경변수로만 정합니다.
+- 고객 관리자가 어댑터 이름과 테스트 계정을 고를 수 있으므로, 토큰을 쓸 원점과 계정은 운영자 환경변수로만 정합니다. 목록 밖이면 엔진 실행 전에 실패하고 토큰을 보내지 않습니다. 원점은 소유 확인(`ORIGIN_NOT_VERIFIED`)도 통과해야 작업이 만들어집니다.
 
 ### B02 데모 설정 예
 

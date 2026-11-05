@@ -42,6 +42,7 @@ def _worker(worker_env):
 def buglab_env(monkeypatch):
     monkeypatch.setenv(resets.BUGLAB_TOKEN_ENV, TOKEN)
     monkeypatch.setenv(resets.BUGLAB_ORIGINS_ENV, f"https://other.example, {ORIGIN}")
+    monkeypatch.setenv(resets.BUGLAB_ACCOUNTS_ENV, "qa1@buglab.test, qa2@buglab.test")
 
 
 @pytest.fixture
@@ -85,6 +86,14 @@ SNAPSHOT = {"base_url": ORIGIN + "/", "reset_adapter": "buglab-v1"}
             "RESET_TARGET_NOT_APPROVED",
         ),
         ({}, SNAPSHOT, None, "RESET_ACCOUNT_MISSING"),
+        ({}, SNAPSHOT, "victim@customer.example", "RESET_ACCOUNT_NOT_APPROVED"),
+        ({resets.BUGLAB_ACCOUNTS_ENV: ""}, SNAPSHOT, EMAIL, "RESET_ACCOUNT_NOT_APPROVED"),
+        (
+            {resets.BUGLAB_ACCOUNTS_ENV: "@other.test"},
+            SNAPSHOT,
+            EMAIL,
+            "RESET_ACCOUNT_NOT_APPROVED",
+        ),
     ],
 )
 def test_adapter_refuses_unapproved_config(buglab_env, monkeypatch, env, snapshot, login_id, code):
@@ -93,6 +102,16 @@ def test_adapter_refuses_unapproved_config(buglab_env, monkeypatch, env, snapsho
     with pytest.raises(resets.ResetConfigError) as error:
         resets.RESETS["buglab-v1"](snapshot, login_id)
     assert error.value.code == code
+
+
+def test_account_domain_entry_and_origin_variants(buglab_env, monkeypatch, calls):
+    monkeypatch.setenv(resets.BUGLAB_ACCOUNTS_ENV, "@BugLab.test")
+    reset = resets.RESETS["buglab-v1"]({"base_url": "HTTPS://Staging.Example.com:443/"}, EMAIL)
+    assert asyncio.run(reset(0)) is True
+    assert calls[0]["url"] == ORIGIN + "/api/test/reset"
+    with pytest.raises(resets.ResetConfigError):
+        # Another port is another server: not approved.
+        resets.RESETS["buglab-v1"]({"base_url": ORIGIN + ":8443/"}, EMAIL)
 
 
 def test_reset_posts_account_with_token(buglab_env, calls):
@@ -348,7 +367,44 @@ async def test_read_only_job_keeps_plain_reset(db_session, conn, monkeypatch):
     assert not isinstance(captured["reset"], StateReset)
 
 
-def test_reset_lock_key_hides_account():
+def test_reset_lock_key_normalized_and_hides_account():
     key = runner.reset_lock_key("buglab-v1", ORIGIN + "/", EMAIL)
-    assert key == runner.reset_lock_key("buglab-v1", ORIGIN, "qa1@buglab.test ")
+    for variant in (ORIGIN, "HTTPS://STAGING.example.com:443/"):
+        assert key == runner.reset_lock_key("buglab-v1", variant, "qa1@buglab.test ")
+    assert key != runner.reset_lock_key("buglab-v1", ORIGIN + ":8443", EMAIL)
     assert "qa1" not in key.lower()
+
+
+def test_stateful_adapters_cover_program_and_conditions():
+    assert runner.stateful_adapters({"reset_adapter": "stateless"}) == []
+    assert runner.stateful_adapters({"reset_adapter": "buglab-v1"}) == ["buglab-v1"]
+    matrix_job = {
+        "reset_adapter": "stateless",
+        "conditions": [{"reset_adapter": "stateless"}, {"reset_adapter": "buglab-v1"}],
+    }
+    assert runner.stateful_adapters(matrix_job) == ["buglab-v1"]
+
+
+async def test_stateful_reset_locks_account_even_without_write_approval(
+    db_session, conn, monkeypatch, buglab_env, calls
+):
+    """Two read-only jobs resetting the same account would still wipe each other's session."""
+    keys = []
+    original = runner.reset_lock_key
+    monkeypatch.setattr(
+        runner, "reset_lock_key", lambda *args: keys.append(args) or original(*args)
+    )
+
+    async def run(self, request, *, reset, is_authorized, cancelled, **kwargs):
+        assert not isinstance(reset, StateReset)  # no approval: plain callback
+        raise PolicyError("CANCELLED")
+
+    monkeypatch.setattr(runner.QAService, "run", run)
+    program, job_id = await approved_job(db_session, conn, monkeypatch)
+    conn.execute(
+        "UPDATE validation_jobs SET scope_snapshot = scope_snapshot - 'state_changes' "
+        "WHERE id = %s",
+        (job_id,),
+    )
+    await asyncio.to_thread(runner.execute_job, job_id, model=ScriptedModel([]))
+    assert keys == [("buglab-v1", ORIGIN, EMAIL)]

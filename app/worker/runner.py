@@ -14,6 +14,7 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from core_engine import (
@@ -31,6 +32,7 @@ from core_engine import (
     RunPolicy,
     Screenshot,
     StateReset,
+    canonical_url,
 )
 from core_engine.video import find_encoder
 from psycopg.rows import dict_row
@@ -86,7 +88,20 @@ def reset_lock_key(adapter_id: str, base_url: str, login_id: str) -> str:
     """One stateful reset target account at a time, across programs, orgs and contexts: two
     jobs resetting the same account would wipe each other's data mid-run."""
     digest = hashlib.sha256(login_id.strip().lower().encode()).hexdigest()
-    return f"reset-account:{adapter_id}:{base_url.rstrip('/').lower()}:{digest}"
+    return f"reset-account:{adapter_id}:{reset_origin(base_url)}:{digest}"
+
+
+def reset_origin(base_url: str) -> str:
+    """Normalized origin (scheme, host, non-default port): one key per real server."""
+    parts = urlsplit(canonical_url(base_url))
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def stateful_adapters(snapshot: dict) -> list[str]:
+    """Stateful reset adapters any run of this job uses (program or condition), approved writes
+    or not: each one resets a shared account and must not overlap another job's run."""
+    runs = [snapshot, *(snapshot.get("conditions") or [])]
+    return sorted({r["reset_adapter"] for r in runs if r["reset_adapter"] in STATEFUL})
 
 
 def check_state_changes(snapshot: dict) -> str | None:
@@ -472,7 +487,8 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
     if uses_credentials and not credentials.is_https(snapshot["base_url"]):
         # Same rule as the API and the engine; never downgrade or retry over HTTP.
         raise JobInputError(credentials.CODE)
-    if approved_adapter and login is None:
+    stateful = stateful_adapters(snapshot)
+    if stateful and login is None:
         # A per-account server reset needs the saved test account even if no run signs in.
         from app.worker.test_accounts import load_login
 
@@ -485,12 +501,11 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
             reset = RESETS[snapshot["reset_adapter"]](snapshot, login_id)
     except ResetConfigError as error:
         raise JobInputError(error.code) from None
-    locks = []
+    locks = [reset_lock_key(a, snapshot["base_url"], login_id or "") for a in stateful]
     if approved_adapter:
         # Engine 0.6.0 sends approved writes only with a StateReset of the approved id.
         # Plain callbacks stay plain: a read-only job behaves exactly as before.
         reset = StateReset(approved_adapter, reset)
-        locks.append(reset_lock_key(approved_adapter, snapshot["base_url"], login_id or ""))
     if conditions:
         service = ConditionsService(
             model,

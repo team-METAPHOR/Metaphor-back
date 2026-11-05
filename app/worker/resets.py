@@ -20,6 +20,8 @@ import urllib.request
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
+from core_engine import PolicyError, canonical_url
+
 logger = logging.getLogger(__name__)
 
 Reset = Callable[[int], Awaitable[bool]]
@@ -49,6 +51,9 @@ BUGLAB_TOKEN_ENV = "QA_RESET_BUGLAB_TOKEN"
 # Exact HTTPS origins (comma-separated) the token may be sent to. A customer admin can pick the
 # adapter id, so without this an arbitrary base_url would receive the token.
 BUGLAB_ORIGINS_ENV = "QA_RESET_BUGLAB_ORIGINS"
+# Test accounts the token may reset (comma-separated exact emails and/or `@domain` entries).
+# Without it any org with an approved origin could spend the token on an arbitrary account.
+BUGLAB_ACCOUNTS_ENV = "QA_RESET_BUGLAB_ACCOUNTS"
 BUGLAB_PATH = "/api/test/reset"
 RESET_TIMEOUT_SECONDS = 10
 _MAX_RESPONSE_BYTES = 64 * 1024
@@ -78,13 +83,24 @@ def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
 
 
 def _origin(url: str) -> str:
-    parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}".lower()
+    parts = urlsplit(canonical_url(url))
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _approved_origins() -> set[str]:
-    raw = os.environ.get(BUGLAB_ORIGINS_ENV, "")
-    return {_origin(v.strip()) for v in raw.split(",") if v.strip()}
+    origins = set()
+    for value in os.environ.get(BUGLAB_ORIGINS_ENV, "").split(","):
+        try:
+            origins.add(_origin(value.strip()))
+        except PolicyError:
+            continue  # empty or malformed entries approve nothing
+    return origins
+
+
+def _account_approved(email: str) -> bool:
+    entries = {v.strip().lower() for v in os.environ.get(BUGLAB_ACCOUNTS_ENV, "").split(",")}
+    domain = "@" + email.rpartition("@")[2]
+    return "@" in email and (email in entries or domain in entries)
 
 
 def _buglab_ok(status: int, data: bytes, email: str) -> bool:
@@ -115,6 +131,8 @@ def _buglab(snapshot: dict, login_id: str | None) -> Reset:
         # The reset is per account: the program's saved test account (form login).
         raise ResetConfigError("RESET_ACCOUNT_MISSING")
     email = login_id.strip().lower()
+    if not _account_approved(email):
+        raise ResetConfigError("RESET_ACCOUNT_NOT_APPROVED")
     url = origin + BUGLAB_PATH
     headers = {"Content-Type": "application/json", "X-Test-Token": token.strip()}
     body = json.dumps({"email": email}).encode()

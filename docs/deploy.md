@@ -185,7 +185,7 @@ METAPHOR_API_URL=https://api.13-197-7-82.sslip.io
 데모 로그인은 대시보드 테스트 계정(설정 > 재현 환경 > + 계정 추가)으로 하고, 로그인 준비 중 401 경로는
 계정의 `unauthenticated_paths: ["/api/auth/me"]`로 등록한다(현재 화면에 입력란이 없으면 `PUT /programs/{id}/test-account`로 저장).
 장바구니 쓰기 승인과 `buglab-v1` 초기화는 [승인된 테스트 쓰기](./api/state-changes.md)를 따른다.
-워커에 `QA_RESET_BUGLAB_TOKEN`, `QA_RESET_BUGLAB_ORIGINS`(dev HTTPS 원점)를 두고 재시작한다.
+워커에 `QA_RESET_BUGLAB_TOKEN`, `QA_RESET_BUGLAB_ORIGINS`(dev HTTPS 원점), `QA_RESET_BUGLAB_ACCOUNTS`(예: `qa1@buglab.test,qa2@buglab.test`)를 두고 재시작한다.
 
 운영자 세션(`QA_SESSION_<ORG>_<REF>`)은 엔진이 처리하지 못하는 로그인(MFA·CAPTCHA·SSO)의 대안일 뿐이다.
 초기화가 계정 세션을 지우므로 초기화 어댑터·쓰기 승인과 함께 쓰지 않는다(API·워커 모두 `STATE_CHANGES_SESSION_CONFLICT`).

@@ -80,10 +80,14 @@ async def _retest_baseline(
             "승인 범위가 바뀌어 같은 조건으로 비교할 수 없습니다. 새 검증(fresh)을 요청하세요.",
         )
     revision = await db.get(ProgramScopeRevision, (program.id, program.current_revision))
-    if body.app_version not in revision.approved_app_versions:
+    # app_version is only the engine's display label; without one, use the current scope's.
+    app_version = body.app_version
+    if app_version is None:
+        app_version = revision.app_version
+    elif app_version not in revision.approved_app_versions:
         raise ApiError(422, "APP_VERSION_NOT_APPROVED", "승인된 테스트 배포 버전이 아닙니다.")
     # Same viewport/test context/session mode as the baseline; only the build changes.
-    snapshot = {**baseline.scope_snapshot, "app_version": body.app_version}
+    snapshot = {**baseline.scope_snapshot, "app_version": app_version}
     if required:
         snapshot["retest_condition_ids"] = required
     return baseline, snapshot
@@ -132,7 +136,7 @@ async def request_job(
                     report,
                     "retest",
                     baseline=baseline,
-                    app_version=body.app_version,
+                    app_version=snapshot["app_version"],
                     snapshot=snapshot,
                 )
             await record_audit(

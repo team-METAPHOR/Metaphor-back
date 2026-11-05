@@ -75,6 +75,18 @@ async def test_retest_copies_baseline_snapshot_with_new_version(client, db_sessi
     assert job.scope_snapshot == expected
 
 
+async def test_retest_without_version_uses_current_scope_label(client, db_session, world):
+    await finish(db_session, world["job_id"])
+    program = world["program"]
+    revision = await db_session.get(ProgramScopeRevision, (program.id, program.current_revision))
+    body = {"mode": "retest", "baseline_job_id": world["job_id"]}
+    response = await request(client, world, body)
+    assert response.status_code == 202, response.text
+    job = await db_session.get(ValidationJob, response.json()["validation_job_id"])
+    assert job.app_version == revision.app_version
+    assert job.scope_snapshot["app_version"] == revision.app_version
+
+
 @pytest.mark.parametrize("verdict", ["inconclusive", None])
 async def test_retest_requires_comparable_baseline(client, db_session, world, verdict):
     await finish(db_session, world["job_id"], verdict=verdict)
@@ -144,7 +156,7 @@ async def test_viewer_cannot_rerun(client, db_session, world):
     "body",
     [
         {"mode": "retest"},
-        {"mode": "retest", "baseline_job_id": "x"},
+        {"mode": "retest", "app_version": "build-2"},
         {"mode": "fresh", "steps": []},
         {"mode": "replan"},
     ],

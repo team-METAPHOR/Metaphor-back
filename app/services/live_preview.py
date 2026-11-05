@@ -5,15 +5,18 @@ job id from another org (or an engine id) reveals nothing. The worker writes the
 (`app/worker/live.py`); this side only reads it and decides what the viewer may be shown.
 """
 
+import secrets
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.models import LiveTicket
 from app.repositories import live_previews as repo
 from app.services import auth
+from app.services.limits import enforce_rate_limit, lock_key, since
 from app.services.validation_jobs import load_visible_job
 
 SCHEMA = "live-relay-1"
@@ -22,6 +25,15 @@ STARTING_GRACE_SECONDS = 10
 # The worker relay heartbeats every 5 s; three missed beats = relay down.
 STALE_SECONDS = 15
 MAX_CONNECTIONS_PER_USER = 4
+
+# Direct `wss://` connections carry a one-time ticket instead of the dashboard's cookie:
+# Sec-WebSocket-Protocol: metaphor-live.v1, ticket.<ticket>. Only PROTOCOL is ever echoed.
+PROTOCOL = "metaphor-live.v1"
+TICKET_PREFIX = "ticket."
+TICKET_TTL = timedelta(seconds=30)
+TICKETS_PER_MINUTE = 30  # per user; reconnects with backoff from a few tabs stay far below
+TICKET_RETENTION = timedelta(minutes=10)
+MAX_TICKET_LENGTH = 128
 
 # Preview states (`relay_state.preview`).
 QUEUED = "queued"  # job not started yet
@@ -41,6 +53,21 @@ class LiveAccess:
     user_id: str
     job_id: str
     report_id: str
+    # Kept for the periodic re-check, whichever way (cookie or ticket) the viewer connected.
+    session_id: str
+
+
+@dataclass(frozen=True)
+class TicketGrant:
+    ticket: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class TicketBinding:
+    session_id: str
+    user_id: str
+    org_id: str
 
 
 @dataclass(frozen=True)
@@ -57,14 +84,72 @@ class LiveView:
     frame_sequence: int | None
 
 
-async def authorize(db: AsyncSession, token: str | None, job_id: str) -> LiveAccess:
-    """401 UNAUTHENTICATED (no/expired session) or 404 NOT_FOUND (no access), as for REST."""
-    user = await auth.user_for_token(db, token) if token else None
-    if user is None:
+async def authorize(
+    db: AsyncSession, session_id: str | None, job_id: str, binding: TicketBinding | None = None
+) -> LiveAccess:
+    """401 UNAUTHENTICATED (no/expired session) or 404 NOT_FOUND (no access), as for REST.
+
+    `session_id` is the stored session id (sha256 of the cookie token). With a ticket
+    `binding`, the job must also still belong to the org and user the ticket was issued for."""
+    user = await auth.user_for_session(db, session_id) if session_id else None
+    if user is None or (binding is not None and binding.user_id != user.id):
         raise ApiError(401, "UNAUTHENTICATED", "Login required")
     async with db.begin():
         job, report = await load_visible_job(db, user.id, job_id)
-        return LiveAccess(user_id=user.id, job_id=job.id, report_id=report.id)
+        if binding is not None and report.org_id != binding.org_id:
+            raise ApiError(404, "NOT_FOUND", "Not found")
+        return LiveAccess(
+            user_id=user.id, job_id=job.id, report_id=report.id, session_id=session_id
+        )
+
+
+async def issue_ticket(db: AsyncSession, user_id: str, session_id: str, job_id: str) -> TicketGrant:
+    """A 30 s one-time ticket for `job_id`, bound to this user, session, org and job.
+
+    404 like every job read for non-members; 429 LIVE_TICKET_THROTTLED past
+    TICKETS_PER_MINUTE per user. The raw ticket is returned once and only its hash is stored."""
+    ticket = secrets.token_urlsafe(32)
+    async with db.begin():
+        job, report = await load_visible_job(db, user_id, job_id)
+        await lock_key(db, f"live_ticket:{user_id}")  # count-then-insert is atomic per user
+        await enforce_rate_limit(
+            db,
+            repo.count_user_tickets(user_id, since(minutes=1)),
+            limit=TICKETS_PER_MINUTE,
+            code="LIVE_TICKET_THROTTLED",
+            message="실시간 화면 연결 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+        )
+        await repo.prune_user_tickets(db, user_id, datetime.now(UTC) - TICKET_RETENTION)
+        expires_at = datetime.now(UTC) + TICKET_TTL
+        await repo.add_ticket(
+            db,
+            LiveTicket(
+                token_hash=auth.token_hash(ticket),
+                session_id=session_id,
+                user_id=user_id,
+                org_id=report.org_id,
+                job_id=job.id,
+                expires_at=expires_at,
+            ),
+        )
+    return TicketGrant(ticket=ticket, expires_at=expires_at)
+
+
+async def consume_ticket(db: AsyncSession, ticket: str, job_id: str) -> TicketBinding:
+    """Burn the ticket (exactly once, even under concurrent handshakes) and return its binding.
+
+    401 TICKET_INVALID for an unknown, expired, already used or revoked-session ticket (one
+    reason, so nothing is learned by probing). A ticket for another job is burned too, then
+    404 NOT_FOUND like any job the caller cannot see."""
+    if not ticket or len(ticket) > MAX_TICKET_LENGTH:
+        raise ApiError(401, "TICKET_INVALID", "Connection ticket is invalid or expired")
+    async with db.begin():
+        row = await repo.consume_ticket(db, auth.token_hash(ticket))
+    if row is None:
+        raise ApiError(401, "TICKET_INVALID", "Connection ticket is invalid or expired")
+    if row.job_id != job_id:
+        raise ApiError(404, "NOT_FOUND", "Not found")
+    return TicketBinding(session_id=row.session_id, user_id=row.user_id, org_id=row.org_id)
 
 
 def preview_state(row) -> str:

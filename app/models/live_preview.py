@@ -1,11 +1,22 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, LargeBinary, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-from app.models.columns import fk
+from app.models.columns import created_at, fk
 
 
 class LivePreview(Base):
@@ -35,3 +46,26 @@ class LivePreview(Base):
     frame_sequence: Mapped[int | None] = mapped_column(Integer)
     # Heartbeat: the worker relay touches it even when nothing changed.
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LiveTicket(Base):
+    """One-time ticket for a direct `wss://` live connection (no cookie reaches the API host).
+
+    Only sha256(ticket) is stored. Bound to the issuing session (deleting the session on logout,
+    password change or membership removal deletes its tickets), user, org and job. Consumed at
+    most once by an atomic `UPDATE ... WHERE used_at IS NULL`; rows are pruned on issuance.
+    """
+
+    __tablename__ = "live_tickets"
+    __table_args__ = (Index("ix_live_tickets_user_id_created_at", "user_id", "created_at"),)
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = fk("users.id", ondelete="CASCADE", index=False)
+    org_id: Mapped[str] = fk("organizations.id", ondelete="CASCADE")
+    job_id: Mapped[str] = fk("validation_jobs.id", ondelete="CASCADE")
+    created_at: Mapped[datetime] = created_at()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

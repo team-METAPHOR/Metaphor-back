@@ -204,8 +204,13 @@ async def logout(db: AsyncSession, token: str) -> None:
 
 
 async def user_for_token(db: AsyncSession, token: str) -> User | None:
+    return await user_for_session(db, token_hash(token))
+
+
+async def user_for_session(db: AsyncSession, session_id: str) -> User | None:
+    """User of a live session by its stored id (sha256 of the cookie token)."""
     async with db.begin():
-        return await repo.get_session_user(db, token_hash(token), datetime.now(UTC))
+        return await repo.get_session_user(db, session_id, datetime.now(UTC))
 
 
 async def memberships(db: AsyncSession, user_id: str) -> list[tuple[str, str, str]]:

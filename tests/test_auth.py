@@ -11,6 +11,7 @@ from app.services.auth import (
     change_password,
     hash_password,
     revoke_user_sessions,
+    token_hash,
     verify_password,
 )
 from tests.factories import make_org, make_user
@@ -302,3 +303,98 @@ async def test_concurrent_failures_cannot_exceed_limit(client, db_session):
     assert sorted(r.status_code for r in results) == [401] * 5 + [429] * 5
     failed = AuditEvent.action == "auth.login_failed"
     assert len((await db_session.scalars(select(AuditEvent.id).where(failed))).all()) == 5
+
+
+NEW_PASSWORD = "brand-new-password-789"
+
+
+async def change(client, token, current=PASSWORD, new=NEW_PASSWORD, **headers):
+    return await client.post(
+        "/api/v1/auth/password",
+        json={"current_password": current, "new_password": new},
+        headers=as_user(token, **{**ORIGIN, **headers}),
+    )
+
+
+async def test_password_change_revokes_all_sessions(client, session_factory, db_session):
+    user = await signup(client)
+    token = await login_token(client)
+    # A second live session (e.g. another device) for the same user.
+    other = "other-device-token"
+    async with session_factory() as db, db.begin():
+        db.add(
+            Session(
+                id=token_hash(other),
+                user_id=user["id"],
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+    assert (await client.get("/api/v1/auth/me", headers=as_user(other))).status_code == 200
+
+    response = await change(client, token)
+    assert response.status_code == 204
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("sid=") and "Path=/api" in cookie and "Max-Age=0" in cookie
+    for t in (token, other):
+        assert (await client.get("/api/v1/auth/me", headers=as_user(t))).status_code == 401
+    assert (await login(client)).status_code == 401
+    assert (await login(client, password=NEW_PASSWORD)).status_code == 200
+    ok = AuditEvent.action == "auth.password_change"
+    actors = (await db_session.scalars(select(AuditEvent.actor_id).where(ok))).all()
+    assert actors == [user["id"]]
+
+
+async def test_wrong_current_password_401(client):
+    await signup(client)
+    token = await login_token(client)
+    response = await change(client, token, current="wrong-password-123")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+    # Nothing changed: session alive, old password still works.
+    assert (await client.get("/api/v1/auth/me", headers=as_user(token))).status_code == 200
+    assert (await login(client)).status_code == 200
+
+
+async def test_password_change_validation_and_guards(client):
+    await signup(client)
+    token = await login_token(client)
+    assert (await change(client, token, new="short")).status_code == 422
+    assert (await change(client, token, new="x" * 257)).status_code == 422
+    foreign = await change(client, token, Origin="https://evil.example")
+    assert foreign.status_code == 403
+    assert foreign.json()["error"]["code"] == "CSRF_REJECTED"
+    anonymous = await client.post(
+        "/api/v1/auth/password",
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+        headers=ORIGIN,
+    )
+    assert anonymous.status_code == 401
+
+
+async def test_password_change_throttled_429(client, db_session):
+    user = await signup(client)
+    token = await login_token(client)
+    for _ in range(5):
+        assert (await change(client, token, current="wrong-password-123")).status_code == 401
+    throttled = await change(client, token)  # correct password, still blocked
+    assert throttled.status_code == 429
+    assert throttled.json()["error"]["code"] == "PASSWORD_CHANGE_THROTTLED"
+    failed = AuditEvent.action == "auth.password_change_failed"
+    actors = (await db_session.scalars(select(AuditEvent.actor_id).where(failed))).all()
+    assert actors == [user["id"]] * 5
+    # Failures older than an hour no longer count.
+    old = datetime.now(UTC) - timedelta(minutes=61)
+    await db_session.execute(update(AuditEvent).where(failed).values(created_at=old))
+    await db_session.commit()
+    assert (await change(client, token)).status_code == 204
+
+
+async def test_concurrent_password_change_failures_cannot_exceed_limit(client, db_session):
+    import asyncio
+
+    await signup(client)
+    token = await login_token(client)
+    results = await asyncio.gather(
+        *(change(client, token, current="wrong-password-123") for _ in range(8))
+    )
+    assert sorted(r.status_code for r in results) == [401] * 5 + [429] * 3

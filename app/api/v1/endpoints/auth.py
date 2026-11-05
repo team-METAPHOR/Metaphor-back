@@ -7,6 +7,7 @@ from app.schemas.auth import (
     LoginRequest,
     MembershipResponse,
     MeResponse,
+    PasswordChangeRequest,
     SignupRequest,
     UserResponse,
 )
@@ -45,6 +46,17 @@ async def logout(request: Request, db: DbSession) -> Response:
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         await auth.logout(db, token)
+    response = Response(status_code=204)
+    response.delete_cookie(SESSION_COOKIE, path="/api")
+    return response
+
+
+@router.post("/password", status_code=204)
+async def change_password(
+    body: PasswordChangeRequest, user: CurrentUser, db: DbSession
+) -> Response:
+    await auth.change_password(db, user.id, body.current_password, body.new_password)
+    # Every session, this one included, was revoked; drop the now-dead cookie too.
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/api")
     return response

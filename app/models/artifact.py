@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 from app.models.columns import created_at, fk, id_pk, one_of
 
-ARTIFACT_KINDS = ("input_image", "report_md", "screenshot", "json")
+ARTIFACT_KINDS = ("input_image", "report_md", "screenshot", "json", "video", "playwright_spec")
 
 
 class Artifact(Base):

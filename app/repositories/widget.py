@@ -32,9 +32,13 @@ async def find_recent_fingerprint(
     )
 
 
-async def bump_duplicate(db: AsyncSession, report_id: str) -> None:
-    await db.execute(
+async def bump_duplicate(db: AsyncSession, report_id: str) -> bool:
+    """Count one more duplicate. Returns whether the report is already scrubbed, read from the
+    row version this UPDATE locked (so a concurrent retention scrub is either seen or waits)."""
+    scrubbed_at = await db.scalar(
         update(Report)
         .where(Report.id == report_id)
         .values(duplicate_count=Report.duplicate_count + 1)
+        .returning(Report.scrubbed_at)
     )
+    return scrubbed_at is not None

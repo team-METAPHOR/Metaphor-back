@@ -22,8 +22,9 @@ async def world(client, db_session):
     program = await make_program(db_session, org)
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
-    _, reviewer_h = await login_as(client, db_session, org, "reviewer")
+    _, triager_h = await login_as(client, db_session, org, "developer")
     _, dev_h = await login_as(client, db_session, org, "developer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
     body = (await submit(client, dev_h, program.id, description="버그")).json()
     return {
         "org": org,
@@ -31,8 +32,9 @@ async def world(client, db_session):
         "report_id": body["id"],
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
-        "reviewer_h": reviewer_h,
+        "triager_h": triager_h,
         "dev_h": dev_h,
+        "viewer_h": viewer_h,
     }
 
 
@@ -40,7 +42,7 @@ async def patch(client, world, status, headers=None):
     return await client.patch(
         f"/api/v1/reports/{world['report_id']}/workflow",
         json={"status": status},
-        headers=headers or world["reviewer_h"],
+        headers=headers or world["triager_h"],
     )
 
 
@@ -51,7 +53,7 @@ async def report_row(db_session, report_id):
 # --- PATCH /reports/{id}/workflow ---------------------------------------------
 
 
-async def test_reviewer_moves_to_fixing_and_audits(client, db_session, world):
+async def test_developer_moves_to_fixing_and_audits(client, db_session, world):
     response = await patch(client, world, "fixing")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -80,8 +82,8 @@ async def test_same_status_is_noop_200(client, world):
     assert (response.status_code, response.json()["workflow_status"]) == (200, "received")
 
 
-async def test_developer_403_stranger_404(client, db_session, world):
-    assert (await patch(client, world, "fixing", world["dev_h"])).status_code == 403
+async def test_viewer_403_stranger_404(client, db_session, world):
+    assert (await patch(client, world, "fixing", world["viewer_h"])).status_code == 403
     _, stranger_h = await login_as(client, db_session)
     assert (await patch(client, world, "fixing", stranger_h)).status_code == 404
     other = await make_org(db_session, "Other")
@@ -91,8 +93,8 @@ async def test_developer_403_stranger_404(client, db_session, world):
     assert (response.status_code, response.json()["error"]["code"]) == (404, "NOT_FOUND")
 
 
-@pytest.mark.parametrize("status", ["closed", "in_review", "accepted", ""])
-async def test_closed_and_unknown_status_422(client, world, status):
+@pytest.mark.parametrize("status", ["in_review", "accepted", ""])
+async def test_unknown_status_422(client, world, status):
     response = await patch(client, world, status)
     assert (response.status_code, response.json()["error"]["code"]) == (422, "VALIDATION_FAILED")
 
@@ -101,17 +103,22 @@ async def test_closed_report_cannot_change_409(client, db_session, world):
     row = await report_row(db_session, world["report_id"])
     row.workflow_status = "closed"
     await db_session.commit()
-    for status in ("received", "fixing", "dismissed"):
+    for status in ("received", "fixing", "dismissed", "closed"):
         response = await patch(client, world, status)
         assert (response.status_code, response.json()["error"]["code"]) == (409, "REPORT_CLOSED")
 
 
+async def test_close_without_verified_fix_409(client, world):
+    response = await patch(client, world, "closed")
+    assert (response.status_code, response.json()["error"]["code"]) == (409, "FIX_NOT_VERIFIED")
+
+
 async def test_requires_csrf_origin(client, world):
-    headers = {"Cookie": world["reviewer_h"]["Cookie"]}
+    headers = {"Cookie": world["triager_h"]["Cookie"]}
     assert (await patch(client, world, "fixing", headers)).status_code == 403
 
 
-# --- auto-close on a passing retest -------------------------------------------
+# --- fix verified by a passing retest, then manual close --------------------------
 
 
 def engine_raw(status="completed", verdict="not_reproduced"):
@@ -165,19 +172,66 @@ def persist(conn, job, tmp_path, raw):
     )
 
 
-async def test_passing_retest_closes_report(client, db_session, world, conn, tmp_path):
+async def test_passing_retest_verifies_fix_but_does_not_close(
+    client, db_session, world, conn, tmp_path
+):
     job = await running_job(db_session, conn, world, "retest")
     assert persist(conn, job, tmp_path, engine_raw())
     report = await report_row(db_session, world["report_id"])
-    assert report.workflow_status == "closed" and report.closed_at is not None
+    assert (report.workflow_status, report.closed_at) == ("fixing", None)
+    audits = await db_session.scalars(
+        select(AuditEvent).where(AuditEvent.action == "report.workflow")
+    )
+    assert audits.all() == []
+    detail = (await client.get(f"/api/v1/reports/{report.id}", headers=world["dev_h"])).json()
+    assert (detail["workflow_status"], detail["progress"]) == ("fixing", "verified")
+    assert detail["fix_verified"] is True and detail["closed_at"] is None
+    (item,) = (await client.get("/api/v1/reports", headers=world["dev_h"])).json()["items"]
+    assert (item["fix_verified"], item["progress"]) == (True, "verified")
+
+
+async def test_close_after_verified_fix(client, db_session, world, conn, tmp_path):
+    job = await running_job(db_session, conn, world, "retest")
+    assert persist(conn, job, tmp_path, engine_raw())
+    response = await patch(client, world, "closed")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["workflow_status"], body["progress"]) == ("closed", "closed")
+    assert body["closed_at"] is not None and body["fix_verified"] is True
     audit = (
         await db_session.scalars(select(AuditEvent).where(AuditEvent.action == "report.workflow"))
     ).one()
-    assert audit.actor_id is None and audit.target == report.id
-    assert audit.detail == {"from": "fixing", "to": "closed", "job_id": job.id}
-    detail = await client.get(f"/api/v1/reports/{report.id}", headers=world["dev_h"])
-    assert (detail.json()["workflow_status"], detail.json()["progress"]) == ("closed", "closed")
-    assert detail.json()["closed_at"] is not None
+    assert audit.actor_id is not None
+    assert audit.detail == {"from": "fixing", "to": "closed"}
+    again = await patch(client, world, "received")
+    assert (again.status_code, again.json()["error"]["code"]) == (409, "REPORT_CLOSED")
+
+
+async def test_fix_verified_follows_latest_finished_job(client, db_session, world, conn, tmp_path):
+    """A later finished job that is not a passing retest clears fix_verified; an active job
+    after the passing retest does not (it has not finished yet)."""
+    job = await running_job(db_session, conn, world, "retest")
+    assert persist(conn, job, tmp_path, engine_raw())
+    fresh = ValidationJob(
+        id="b" * 32,
+        report_id=job.report_id,
+        org_id=job.org_id,
+        kind="fresh",
+        status="running",
+        scope_revision=1,
+        scope_snapshot={},
+    )
+    db_session.add(fresh)
+    report = await report_row(db_session, world["report_id"])
+    report.latest_job_id = fresh.id
+    await db_session.commit()
+    url = f"/api/v1/reports/{report.id}"
+    assert (await client.get(url, headers=world["dev_h"])).json()["fix_verified"] is True
+    assert persist(conn, fresh, tmp_path, engine_raw("completed", "reproduced"))
+    detail = (await client.get(url, headers=world["dev_h"])).json()
+    assert (detail["fix_verified"], detail["progress"]) == (False, "fixing")
+    response = await patch(client, world, "closed")
+    assert (response.status_code, response.json()["error"]["code"]) == (409, "FIX_NOT_VERIFIED")
 
 
 @pytest.mark.parametrize(
@@ -190,7 +244,7 @@ async def test_passing_retest_closes_report(client, db_session, world, conn, tmp
         ("initial", "completed", "not_reproduced"),
     ],
 )
-async def test_no_auto_close(db_session, world, conn, tmp_path, kind, status, verdict):
+async def test_not_verified(client, db_session, world, conn, tmp_path, kind, status, verdict):
     job = await running_job(db_session, conn, world, kind)
     before = (await report_row(db_session, world["report_id"])).workflow_status
     assert persist(conn, job, tmp_path, engine_raw(status, verdict))
@@ -200,14 +254,17 @@ async def test_no_auto_close(db_session, world, conn, tmp_path, kind, status, ve
         select(AuditEvent).where(AuditEvent.action == "report.workflow")
     )
     assert audits.all() == []
+    detail = (await client.get(f"/api/v1/reports/{report.id}", headers=world["dev_h"])).json()
+    assert detail["fix_verified"] is False
 
 
-async def test_lost_result_does_not_close(db_session, world, conn, tmp_path):
+async def test_lost_result_does_not_verify(client, db_session, world, conn, tmp_path):
     """A result that loses the race to a terminal state writes nothing, so nothing closes."""
     job = await running_job(db_session, conn, world, "retest")
     conn.execute("UPDATE validation_jobs SET status = 'cancelled' WHERE id = %s", (job.id,))
     assert not persist(conn, job, tmp_path, engine_raw())
     assert (await report_row(db_session, world["report_id"])).workflow_status == "fixing"
+    assert (await patch(client, world, "closed")).status_code == 409
 
 
 # --- progress ------------------------------------------------------------------
@@ -241,11 +298,25 @@ def test_progress_mapping(workflow, job, progress):
     assert report_progress(workflow, job) == progress
 
 
+@pytest.mark.parametrize(
+    ("workflow", "progress"),
+    [
+        ("closed", "closed"),
+        ("dismissed", "dismissed"),
+        ("fixing", "verified"),
+        ("received", "verified"),
+    ],
+)
+def test_progress_verified(workflow, progress):
+    job = JobBrief(id="j", kind="retest", status="completed", verdict="not_reproduced")
+    assert report_progress(workflow, job, fix_verified=True) == progress
+
+
 async def test_list_items_carry_progress(client, world):
     listed = await client.get("/api/v1/reports", headers=world["dev_h"])
     (item,) = listed.json()["items"]
     assert (item["progress"], item["workflow_status"]) == ("reproducing", "received")
-    assert item["closed_at"] is None
+    assert item["closed_at"] is None and item["fix_verified"] is False
 
 
 # --- migration 0007 --------------------------------------------------------------

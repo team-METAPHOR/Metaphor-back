@@ -27,3 +27,7 @@ artifacts/
 
 # Private evidence storage
 var/
+
+# Test-account keypair (app.worker.keys); the private key belongs in the worker env only.
+*.pem
+node_modules/

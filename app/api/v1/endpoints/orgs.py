@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Path, Response
+from fastapi import APIRouter, Header, Path, Query, Response
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import CurrentUser, DbSession
@@ -17,7 +18,7 @@ from app.schemas.org import (
     OrgPatch,
     OrgResponse,
 )
-from app.schemas.report import ReportDetail
+from app.schemas.report import ReportDetail, ReportStats, ReportSummary
 from app.services import invites, reports
 from app.services import orgs as service
 
@@ -90,3 +91,32 @@ async def get_report_by_number(
 ):
     """Report detail by the org's human number (BUG-<number>); members only, 404 otherwise."""
     return await reports.get_report_by_number(db, user.id, org_id, number)
+
+
+@router.get("/orgs/{org_id}/report-summary", response_model=ReportSummary)
+async def report_summary(org_id: str, user: CurrentUser, db: DbSession):
+    """Dashboard cards: report counts by progress and the newest reports needing attention."""
+    return await reports.report_summary(db, user.id, org_id)
+
+
+@router.get("/orgs/{org_id}/report-stats", response_model=ReportStats)
+async def report_stats(
+    org_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    days: Annotated[int, Query()] = 7,
+    window_from: Annotated[datetime | None, Query(alias="from")] = None,
+    window_to: Annotated[datetime | None, Query(alias="to")] = None,
+    program_id: str | None = None,
+):
+    """Reproduction metrics over `from`..`to` (to exclusive, default now; at most 90 days), or
+    the last `days` days (clamped to 1..90) when `from` is absent. Optional `program_id`."""
+    return await reports.report_stats(
+        db,
+        user.id,
+        org_id,
+        days,
+        window_from=window_from,
+        window_to=window_to,
+        program_id=program_id,
+    )

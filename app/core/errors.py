@@ -22,12 +22,20 @@ _HTTP_CODES = {
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str, detail: dict | None = None):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        detail: dict | None = None,
+        headers: dict | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
         self.detail = detail
+        self.headers = headers
 
 
 def error_response(
@@ -56,7 +64,7 @@ async def request_id_middleware(request: Request, call_next) -> Response:
 
 
 async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
-    return error_response(request, exc.status, exc.code, exc.message, exc.detail)
+    return error_response(request, exc.status, exc.code, exc.message, exc.detail, exc.headers)
 
 
 async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

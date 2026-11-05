@@ -16,8 +16,8 @@ Metaphor is a screenshot-driven web QA service.
   report with an AI model, plans steps, reproduces the bug twice in fresh Playwright browser
   contexts inside the customer's **approved test scope**, and writes a verdict
   (`reproduced` / `not_reproduced` / `inconclusive`), evidence, and a Korean report.
-- Customer developers and reviewers read results, answer follow-up questions (`resume`), and
-  re-verify a fix with the same stored plan (`retest`).
+- Customer org members read results; developers and admins answer follow-up questions
+  (`resume`) and re-verify a fix with the same stored plan (`retest`).
 
 Out of scope: editing customer source code, applying patches, opening PRs, email/Slack
 notifications, external issue creation.
@@ -93,19 +93,29 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 - At most one active job (`queued`/`running`/`cancelling`) per report — enforced by a partial
   unique index, not only app code.
 - `reports.workflow_status` (human review) is separate from job status and AI classification.
-  Its only system transition is `closed`, set by the worker when a retest passes.
+  The system never changes it: a passing retest only sets `fix_verified`, and a person closes
+  the report (`closed` is allowed only while `fix_verified` is true).
 - Every job creation goes through the shared `create_job` service (daily limit, active-job check).
 - Every report creation goes through the shared `create_report` service (platform and widget).
 - Cross-org access returns **404**, not 403, so existence is not leaked.
 - Programs, platform report submission, reports, jobs and evidence are for active members of
-  the owner org only. Roles then gate writes (e.g. answer/rerun/cancel: reviewer or admin).
+  the owner org only. Roles then gate writes: `admin` (org, members, invites, programs/scope,
+  widget, origin verification) ⊃ `developer` (file reports, rerun/retest, answer, cancel,
+  workflow, assignee) ⊃ `viewer` (read only; every write is 403). Role tuples live only in
+  `app/services/access.py` (`READ_ROLES`, `WRITE_ROLES`, `ADMIN_ROLES`).
 - Anonymous widget reporters can never read results, jobs, evidence, or other reports.
 - Engine internals (`_baseline`, `_parent`) are never called directly. Use `run/resume/retest`.
 
 ## 5. Security rules
 
-- Secrets (`OPENAI_API_KEY`, `QA_SESSION_<REF>` test session headers) exist only in the worker
-  environment. Never in API settings, responses, logs, queue rows, or tests' snapshots.
+- Secrets (`OPENAI_API_KEY`, `GROQ_API_KEY`, `QA_SESSION_<REF>` test session headers,
+  `TEST_ACCOUNT_PRIVATE_KEY`) exist only in the worker environment. Never in API settings,
+  responses, logs, queue rows, or tests' snapshots.
+- Program test accounts (login id + password) are the one customer secret stored in the DB, and
+  only sealed (`app/core/test_account_crypto.py`: AES-256-GCM + RSA-OAEP, bound to program id,
+  version and key id). The API holds only `TEST_ACCOUNT_PUBLIC_KEY` and can seal but never
+  open; only the worker decrypts. Never return, log or audit the password, full login id,
+  ciphertext or keys; validation errors never echo input.
 - Uploaded screenshots: validate with `core_engine.Screenshot`, apply reporter `mask_boxes`
   with `Screenshot.masked`, persist **only** the masked image. Never keep the raw upload.
 - Store report text only after `redact_text`. Length limits apply to the raw input.
@@ -186,7 +196,7 @@ review the generated file → `uv run alembic upgrade head`. Never create tables
 - Prefer the smallest change that satisfies the task. Reuse shared services (`create_report`,
   `create_job`, `run_once`, `enforce_rate_limit`, `record_audit`) instead of re-implementing.
 - No new dependency without a reason stated in the PR. Stdlib first.
-- Do not modify the engine (`metaphor-core-engine`, pinned at `2ccf627`), Playwright behavior,
+- Do not modify the engine (`metaphor-core-engine`, pinned at `4a710f0`), Playwright behavior,
   or model prompts from this repo.
 - Error responses use the shared envelope:
   `{"error": {"code": "UPPER_SNAKE", "message": "...", "request_id": "..."}}`.

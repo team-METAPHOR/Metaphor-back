@@ -338,3 +338,15 @@ async def test_hook_not_called_for_completed(db_session, conn, worker, monkeypat
     monkeypatch.setattr(rerun, "auto_fresh", spy)
     await run_claimed(conn, job_id)
     assert calls == []
+
+
+@pytest.mark.parametrize("code", ["MODEL_RATE_LIMITED", "MODEL_AUTH_FAILED", "MODEL_TIMEOUT"])
+async def test_auto_fresh_skips_provider_errors(db_session, session_factory, code):
+    """A rate limit or bad key is not a scenario problem: don't regenerate on the same model."""
+    report, job_id = await seeded(db_session)
+    job = await db_session.get(ValidationJob, job_id)
+    job.error_code = code
+    await settle(db_session, job_id)
+    assert await run_auto_fresh(session_factory, job_id) is None
+    assert len(await jobs_of(db_session, report.id)) == 1
+    assert await auto_audits(db_session) == []

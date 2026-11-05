@@ -130,5 +130,6 @@ async def create_job(
             409, "ACTIVE_JOB_EXISTS", "이 제보에 이미 진행 중인 검증 작업이 있습니다."
         ) from None
     report.latest_job_id = job.id
+    report.run_blocked = None  # a parked report is no longer waiting once a job is queued
     await session.flush()
     return job

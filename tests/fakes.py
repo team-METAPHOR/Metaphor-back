@@ -1,9 +1,10 @@
-"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at 2ccf627."""
+"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at 4a710f0."""
 
 import copy
 import json
 
 from core_engine import Generation, QAResult, TokenUsage
+from core_engine.qa_schema import draft_plan
 
 
 def intake(status="ready"):
@@ -18,6 +19,9 @@ def intake(status="ready"):
         "symptom_description": "이전 cat 목록이 남음",
         "reproduction_steps": ["cat 검색 후 missing 검색"],
         "preconditions": [],
+        "required_actions": [],
+        "actions_complete": False,
+        "completion_signal": None,
         "questions": ["기대 동작을 알려주세요."] if status == "needs_info" else [],
     }
 
@@ -31,8 +35,13 @@ class ScriptedModel:
         self.calls.append(kwargs)
         if not self.responses:
             raise AssertionError("unexpected model call")
-        response = self.responses.pop(0)
-        return Generation(json.dumps(copy.deepcopy(response)), "offline", TokenUsage(100, 50))
+        response = copy.deepcopy(self.responses.pop(0))
+        if isinstance(response, Exception):
+            raise response
+        # Plan-bearing schemas (plan, revision) take the model-facing draft shape.
+        if "plan" in kwargs.get("schema", {}).get("properties", {}) and response.get("plan"):
+            response["plan"] = draft_plan(response["plan"])
+        return Generation(json.dumps(response), "offline", TokenUsage(100, 50))
 
 
 def completed_report(engine_job_id, *, analysis=True, error_code=None):

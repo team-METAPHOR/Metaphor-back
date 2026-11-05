@@ -11,13 +11,15 @@ from app.schemas.program import (
     ProgramSummary,
     ScopeResponse,
 )
-from app.services import origin_verification
+from app.services import origin_verification, test_accounts
 from app.services import programs as service
 
 router = APIRouter(prefix="/programs", tags=["programs"])
 
 
-def _full(program: Program, revision: ProgramScopeRevision) -> ProgramResponse:
+def _full(
+    program: Program, revision: ProgramScopeRevision, has_test_account: bool = False
+) -> ProgramResponse:
     return ProgramResponse(
         id=program.id,
         org_id=program.owner_org_id,
@@ -41,7 +43,8 @@ def _full(program: Program, revision: ProgramScopeRevision) -> ProgramResponse:
             approved_app_versions=revision.approved_app_versions,
             test_context_id=revision.test_context_id,
             mask_selectors=revision.mask_selectors,
-            has_session=revision.session_secret_ref is not None,
+            has_session=revision.session_secret_ref is not None or has_test_account,
+            has_test_account=has_test_account,
             reset_adapter=revision.reset_adapter,
             created_at=revision.created_at,
         ),
@@ -66,12 +69,14 @@ async def list_programs(user: CurrentUser, db: DbSession):
 
 @router.get("/{program_id}", response_model=ProgramResponse)
 async def get_program(program_id: str, user: CurrentUser, db: DbSession):
-    return _full(*await service.get_program(db, user.id, program_id))
+    program, revision = await service.get_program(db, user.id, program_id)
+    return _full(program, revision, await test_accounts.is_configured(db, program.id))
 
 
 @router.patch("/{program_id}", response_model=ProgramResponse)
 async def update_program(program_id: str, body: ProgramPatch, user: CurrentUser, db: DbSession):
-    return _full(*await service.update_program(db, user.id, program_id, body))
+    program, revision = await service.update_program(db, user.id, program_id, body)
+    return _full(program, revision, await test_accounts.is_configured(db, program.id))
 
 
 def _verification(row: OriginVerification) -> OriginVerificationResponse:

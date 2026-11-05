@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ApiError
 from app.models import AuditEvent, OriginVerification, Program, ProgramScopeRevision
 from app.repositories import programs as repo
-from app.services.access import require_org_role
+from app.services.access import ADMIN_ROLES, require_org_role
 from app.services.audit import record_audit
 from app.services.limits import enforce_rate_limit, lock_key, since
 
@@ -129,7 +129,7 @@ async def _admin_program(db: AsyncSession, user_id: str, program_id: str) -> Pro
     program = await repo.get(db, program_id)
     if program is None:
         raise ApiError(404, "NOT_FOUND", "Not found")
-    await require_org_role(db, user_id, program.owner_org_id, "admin")
+    await require_org_role(db, user_id, program.owner_org_id, *ADMIN_ROLES)
     return program
 
 

@@ -11,7 +11,7 @@ from app.models import Membership, OrgInvite
 from app.repositories import invites as repo
 from app.repositories import orgs as orgs_repo
 from app.schemas.org import InviteAccepted, InviteCreated, InviteResponse
-from app.services.access import org_role, require_org_role
+from app.services.access import ADMIN_ROLES, org_role, require_org_role
 from app.services.audit import count_actions, record_audit
 from app.services.auth import token_hash
 from app.services.limits import enforce_rate_limit, lock_key, since
@@ -33,7 +33,7 @@ async def create_invite(
         # Org row lock first, then the role check: a concurrent demotion (which takes the same
         # lock) cannot slip between them, and the pending count and insert cannot interleave.
         await orgs_repo.get(db, org_id, for_update=True)
-        await require_org_role(db, actor_id, org_id, "admin")
+        await require_org_role(db, actor_id, org_id, *ADMIN_ROLES)
         now = datetime.now(UTC)
         if await repo.count_pending(db, org_id, now) >= PENDING_LIMIT:
             raise ApiError(409, "INVITE_LIMIT", "대기 중인 초대가 너무 많습니다.")
@@ -61,7 +61,7 @@ async def create_invite(
 
 async def list_invites(db: AsyncSession, actor_id: str, org_id: str) -> list[InviteResponse]:
     async with db.begin():
-        await require_org_role(db, actor_id, org_id, "admin")
+        await require_org_role(db, actor_id, org_id, *ADMIN_ROLES)
         rows = await repo.list_pending(db, org_id, datetime.now(UTC))
         return [
             InviteResponse(id=i.id, role=i.role, created_by=i.created_by, expires_at=i.expires_at)
@@ -72,7 +72,7 @@ async def list_invites(db: AsyncSession, actor_id: str, org_id: str) -> list[Inv
 async def revoke_invite(db: AsyncSession, actor_id: str, org_id: str, invite_id: str) -> None:
     async with db.begin():
         await orgs_repo.get(db, org_id, for_update=True)
-        await require_org_role(db, actor_id, org_id, "admin")
+        await require_org_role(db, actor_id, org_id, *ADMIN_ROLES)
         invite = await repo.get_in_org(db, org_id, invite_id)
         if invite is None or invite.used_at is not None or invite.revoked_at is not None:
             raise ApiError(404, "NOT_FOUND", "초대를 찾을 수 없습니다.")

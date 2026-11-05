@@ -28,6 +28,7 @@ from app.services.intake import (
 )
 from app.services.limits import enforce_rate_limit, since
 from app.services.origin_verification import origin_of
+from app.services.report_duplicates import record_duplicate
 from app.services.reports import TEXT_LIMITS, create_report
 from app.services.widget_settings import normalize_origin, origin_kind
 
@@ -53,6 +54,11 @@ BUILTIN_MASK_SELECTORS = (
 def widget_daily_limit(program: Program) -> int:
     """Anonymous reports may use at most half of the program's daily job budget."""
     return max(1, program.daily_job_limit // 2)
+
+
+# Over the cap reports are parked (stored, no job). Parking still costs storage, so anonymous
+# traffic also has an absolute daily ceiling on stored widget reports.
+WIDGET_STORE_MULTIPLIER = 4
 
 
 def config_limits() -> dict:
@@ -299,23 +305,36 @@ async def submit_report(
                 limit=PROJECT_HOURLY_LIMIT,
                 code="WIDGET_PROJECT_RATE_LIMITED",
             )
+            # Over the daily cap the report is still stored, just parked (no job). The reporter
+            # gets the same 201 either way, so the customer's quota state does not leak.
             day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-            await enforce_rate_limit(
-                db,
-                repo.count_since(program.id, day_start),
-                limit=widget_daily_limit(program),
-                code="WIDGET_DAILY_LIMITED",
-                message="오늘 받을 수 있는 위젯 신고 수를 초과했습니다.",
-            )
-            fp = None
+            today = await db.scalar(repo.count_since(program.id, day_start))
+            cap = widget_daily_limit(program)
+            if today >= cap * WIDGET_STORE_MULTIPLIER:
+                raise ApiError(
+                    429, "WIDGET_DAILY_LIMITED", "오늘은 더 이상 신고를 받을 수 없습니다."
+                )
+            over_cap = today >= cap
+            fp = original = None
             if body.error_type != "manual":
                 fp = fingerprint(program.id, body, context, page_path)
                 original = await repo.find_recent_fingerprint(
                     db, program.id, fp, since(**DEDUP_WINDOW)
                 )
-                if original is not None:
-                    await repo.bump_duplicate(db, original.id)
-                    return 200, {"status": "duplicate", "receipt_id": None}
+            description = engine_description(
+                _clean(body.description, MAX_DESCRIPTION), body, context
+            )
+            if original is not None:
+                await record_duplicate(
+                    db,
+                    original,
+                    program,
+                    description=description,
+                    client_context=context,
+                    screenshot=screenshot,
+                )
+                # Same answer whether or not the duplicate was stored (cap, scrub).
+                return 200, {"status": "duplicate", "receipt_id": None}
             report, _ = await create_report(
                 db,
                 ReportSubmission(
@@ -324,9 +343,7 @@ async def submit_report(
                     source="widget",
                     author_id=None,
                     title=body.title,
-                    description=engine_description(
-                        _clean(body.description, MAX_DESCRIPTION), body, context
-                    ),
+                    description=description,
                     screenshot=screenshot,
                     error_type=body.error_type,
                     origin_kind=kind,
@@ -334,6 +351,7 @@ async def submit_report(
                     fingerprint=fp,
                     client_ip_hash=client_ip_hash,
                 ),
+                park_code="WIDGET_DAILY_LIMITED" if over_cap else None,
             )
             await db.refresh(report, ["created_at"])
             created_at = report.created_at.astimezone(UTC).isoformat()

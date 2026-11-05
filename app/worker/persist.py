@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,8 +12,14 @@ from psycopg.types.json import Jsonb
 from app.core.ids import new_id
 from app.core.text import redact, redact_tree
 from app.integrations import storage
+from app.worker import conditions
 
-_KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json"}
+logger = logging.getLogger(__name__)
+_KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json", ".webm": "video"}
+SPEC_FILE = "reproduction.spec.ts"
+# Stored byte-for-byte: the engine masks video frames before encoding and builds the test from
+# the scope-checked plan, and text redaction would change an executable test.
+_VERBATIM = {"video", "playwright_spec"}
 # Engine inputs that resume/retest replay. request.json text was redacted at intake and its
 # entry_url query must survive; scenario.json's plan is digest-checked, so only the rest of it
 # is redacted.
@@ -23,6 +30,23 @@ _KEEP_KEYS = {"scenario.json": ("plan",)}
 def normalize(raw: dict) -> dict:
     """JSON round-trip (enums → str, tuples → lists) so what we store equals what we serve."""
     return json.loads(json.dumps(raw, default=str))
+
+
+def artifact_kind(path: Path) -> str | None:
+    if path.name == SPEC_FILE:
+        return "playwright_spec"
+    return _KINDS.get(path.suffix)
+
+
+def reported_hashes(report: dict) -> dict[str, str]:
+    """Engine-reported sha256 per media file name (videos[] and test_export)."""
+    items = [video.get("artifact") for video in report.get("videos") or []]
+    items.append((report.get("test_export") or {}).get("artifact"))
+    return {
+        item["name"]: item["sha256"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("sha256")
+    }
 
 
 def redact_file(path: Path) -> bytes:
@@ -57,17 +81,21 @@ def read_events(engine_dir: Path) -> list[dict]:
         return []
 
 
-def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path) -> None:
+def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path, source: str = "") -> None:
+    """Mirror one engine dir's events. `source` = "" for the job's own engine job, else the
+    per-condition child engine id (its sequence numbers restart at the child)."""
     events = read_events(engine_dir)
     if not events:
         return
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO job_events (job_id, engine_sequence, kind, detail, created_at) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (job_id, engine_sequence) DO NOTHING",
+            "INSERT INTO job_events (job_id, engine_source, engine_sequence, kind, detail, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (job_id, engine_source, engine_sequence) DO NOTHING",
             [
                 (
                     job_id,
+                    source,
                     e["sequence"],
                     e["kind"],
                     Jsonb(redact_tree(e.get("detail") or {})),
@@ -83,25 +111,6 @@ def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path) -> None
         )
 
 
-def close_report(conn: psycopg.Connection, report_id: str, org_id: str, job_id: str) -> None:
-    """마감: a passing retest closes the report (system actor). Caller's transaction."""
-    row = conn.execute(
-        "SELECT workflow_status FROM reports WHERE id = %s FOR UPDATE", (report_id,)
-    ).fetchone()
-    if row is None or row[0] == "closed":
-        return
-    conn.execute(
-        "UPDATE reports SET workflow_status = 'closed', closed_at = now(), updated_at = now() "
-        "WHERE id = %s",
-        (report_id,),
-    )
-    conn.execute(
-        "INSERT INTO audit_events (actor_id, org_id, action, target, detail) "
-        "VALUES (NULL, %s, 'report.workflow', %s, %s)",
-        (org_id, report_id, Jsonb({"from": row[0], "to": "closed", "job_id": job_id})),
-    )
-
-
 def persist_result(
     conn: psycopg.Connection,
     job_id: str,
@@ -109,15 +118,33 @@ def persist_result(
     *,
     org_id: str,
     report_id: str,
-    engine_dir: Path,
+    engine_dir: Path | None,
     retention_days: int,
+    child_dirs: tuple[Path, ...] = (),
 ) -> bool:
     """Apply the engine result if the job is still active. Returns False (and writes nothing)
     when the job already reached a terminal state elsewhere — a result never overwrites one."""
-    raw = redact_tree(normalize(raw))
+    raw = normalize(raw)
+    expected_hashes = reported_hashes(raw.get("report") or {})
+    raw = redact_tree(raw)
     report = raw.get("report") or {}
     run = report.get("run") or {}
     verdict = run.get("verdict") or {}
+    matrix = report.get("schema_version") == conditions.SCHEMA
+    columns = (
+        conditions.summary(raw, report)
+        if matrix
+        else {
+            "verdict": verdict.get("value"),
+            "reason": verdict.get("reason_code"),
+            "classification": report.get("classification"),
+            "regression": report.get("regression"),
+            "error": raw.get("error_code"),
+            "questions": list(raw.get("questions") or []),
+            "analysis": report.get("analysis") is not None,
+            "review": report.get("human_review_required", True),
+        }
+    )
     with conn.transaction():
         cur = conn.execute(
             """
@@ -128,31 +155,22 @@ def persist_result(
                 analysis_available = %(analysis)s, human_review_required = %(review)s,
                 lease_owner = NULL, lease_expires_at = NULL, finished_at = now()
             WHERE id = %(id)s AND status IN ('running', 'cancelling')
-            RETURNING kind
             """,
             {
+                **columns,
                 "id": job_id,
                 "status": raw["status"],
-                "verdict": verdict.get("value"),
-                "reason": verdict.get("reason_code"),
-                "classification": report.get("classification"),
-                "regression": report.get("regression"),
-                "error": raw.get("error_code"),
-                "questions": Jsonb(list(raw.get("questions") or [])),
-                "analysis": report.get("analysis") is not None,
-                "review": report.get("human_review_required", True),
+                "questions": Jsonb(columns["questions"]),
             },
         )
-        row = cur.fetchone()
-        if row is None:
+        if cur.rowcount != 1:
             return False
-        passed = raw["status"] == "completed" and verdict.get("value") == "not_reproduced"
-        if row[0] == "retest" and passed:
-            close_report(conn, report_id, org_id, job_id)
         conn.execute(
             "INSERT INTO qa_results (job_id, schema_version, raw) VALUES (%s, %s, %s)",
-            (job_id, int(report.get("schema_version") or 1), Jsonb(raw)),
+            (job_id, str(report.get("schema_version") or 1), Jsonb(raw)),
         )
+        if matrix:
+            conditions.store_rows(conn, job_id, report)
         for call in report.get("model_calls") or []:
             usage = call.get("usage") or {}
             conn.execute(
@@ -161,7 +179,7 @@ def persist_result(
                 (
                     job_id,
                     org_id,
-                    call.get("phase"),
+                    call.get("phase") or call.get("role"),  # matrix budget records: role
                     call.get("status"),
                     call.get("model"),
                     usage.get("input_tokens"),
@@ -169,11 +187,19 @@ def persist_result(
                 ),
             )
         expires = datetime.now(UTC) + timedelta(days=retention_days)
-        for path in sorted(engine_dir.iterdir()):
-            kind = _KINDS.get(path.suffix)
+        for path in sorted(p for d in (engine_dir, *child_dirs) if d for p in d.iterdir()):
+            kind = artifact_kind(path)
             if kind is None or not path.is_file() or path.is_symlink():
                 continue
-            data = redact_file(path)
+            if kind in _VERBATIM:
+                data = path.read_bytes()
+                expected = expected_hashes.get(path.name)
+                if expected and hashlib.sha256(data).hexdigest() != expected:
+                    # Kind only: the file name embeds a hash and adds nothing for operators.
+                    logger.warning("artifact hash mismatch for job %s: %s skipped", job_id, kind)
+                    continue
+            else:
+                data = redact_file(path)
             conn.execute(
                 "INSERT INTO artifacts (id, org_id, report_id, job_id, kind, storage_key, sha256, "
                 "size, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -189,5 +215,8 @@ def persist_result(
                     expires,
                 ),
             )
-        sync_events(conn, job_id, engine_dir)
+        if engine_dir is not None:
+            sync_events(conn, job_id, engine_dir)
+        for child in child_dirs:
+            sync_events(conn, job_id, child, source=child.name)
     return True

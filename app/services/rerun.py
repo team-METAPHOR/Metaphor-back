@@ -10,15 +10,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.core.text import redact
-from app.models import AuditEvent, Program, ProgramScopeRevision, QaResult, Report, ValidationJob
+from app.models import (
+    AuditEvent,
+    Program,
+    ProgramScopeRevision,
+    QaResult,
+    Report,
+    ValidationJob,
+    ValidationJobCondition,
+)
 from app.schemas.report import JobRequest
-from app.services.access import org_role
+from app.services import test_conditions
+from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
-from app.services.jobs import create_job, enforce_job_request_limit
+from app.services.jobs import create_job, enforce_job_request_limit, scope_snapshot
+from app.services.provider_limits import enforce_provider_wait
 from app.services.reports import load_visible_report
 
-RERUN_ROLES = ("reviewer", "admin")
 COMPARABLE_VERDICTS = ("reproduced", "not_reproduced")
 
 
@@ -28,6 +37,29 @@ async def _retest_baseline(
     baseline = await db.get(ValidationJob, body.baseline_job_id)
     if baseline is None or baseline.report_id != report_id:
         raise ApiError(404, "NOT_FOUND", "기준 검증 작업을 찾을 수 없습니다.")
+    required: list[str] = []
+    if baseline.has_conditions:
+        # Retest every condition that reproduced in the matrix run (a condition retest is
+        # never a baseline itself: it has no matrix engine job).
+        required = list(
+            (
+                await db.scalars(
+                    select(ValidationJobCondition.condition_id)
+                    .where(
+                        ValidationJobCondition.job_id == baseline.id,
+                        ValidationJobCondition.verdict == "reproduced",
+                        ValidationJobCondition.engine_job_id.is_not(None),
+                    )
+                    .order_by(ValidationJobCondition.ordinal)
+                )
+            ).all()
+        )
+        if not required:
+            raise ApiError(
+                409,
+                "BASELINE_NOT_COMPARABLE",
+                "재현된 조건이 있는 조건 비교 작업만 재검증 기준이 될 수 있습니다.",
+            )
     # Product policy (stricter than the engine): only a confirmed verdict is a baseline.
     if (
         baseline.status != "completed"
@@ -50,7 +82,10 @@ async def _retest_baseline(
     if body.app_version not in revision.approved_app_versions:
         raise ApiError(422, "APP_VERSION_NOT_APPROVED", "승인된 테스트 배포 버전이 아닙니다.")
     # Same viewport/test context/session mode as the baseline; only the build changes.
-    return baseline, {**baseline.scope_snapshot, "app_version": body.app_version}
+    snapshot = {**baseline.scope_snapshot, "app_version": body.app_version}
+    if required:
+        snapshot["retest_condition_ids"] = required
+    return baseline, snapshot
 
 
 async def request_job(
@@ -61,17 +96,33 @@ async def request_job(
     ).hexdigest()
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
-        if await org_role(db, user_id, report.org_id) not in RERUN_ROLES:
+        if await org_role(db, user_id, report.org_id) not in WRITE_ROLES:
             raise ApiError(403, "FORBIDDEN", "재실행 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
+            await enforce_provider_wait(db, report)
             await enforce_job_request_limit(db, user_id)
             program = await db.get(Program, report.program_id)
             if program.status != "active" or not program.external_ai_allowed:
                 raise ApiError(
                     422, "PROGRAM_NOT_ACTIVE", "현재 검증을 실행할 수 없는 프로그램입니다."
                 )
-            if body.mode == "fresh":
+            if body.mode == "fresh" and (body.condition_ids or body.auto_select_conditions):
+                revision = await db.get(
+                    ProgramScopeRevision, (program.id, program.current_revision)
+                )
+                snapshot = {
+                    **scope_snapshot(program, revision),
+                    **await test_conditions.selection_snapshot(
+                        db,
+                        program.id,
+                        body.condition_ids,
+                        body.auto_select_conditions,
+                        body.max_conditions,
+                    ),
+                }
+                job = await create_job(db, report, "fresh", snapshot=snapshot)
+            elif body.mode == "fresh":
                 job = await create_job(db, report, "fresh")
             else:
                 baseline, snapshot = await _retest_baseline(db, report.id, program, body)
@@ -109,6 +160,18 @@ AUTO_FRESH_SOURCE_KINDS = ("initial", "resume")
 # create_job refusals that mean "not now": active job, scrubbed report, unverified origin
 # (scope moved to a new origin since the run), daily limit.
 AUTO_FRESH_SKIP_STATUSES = (409, 410, 422, 429)
+# The model provider, not the scenario, ended the job: a new scenario would spend the primary
+# model again on the same rate limit, bad key or outage.
+PROVIDER_ERROR_CODES = frozenset(
+    {
+        "MODEL_RATE_LIMITED",
+        "MODEL_AUTH_FAILED",
+        "MODEL_TIMEOUT",
+        "MODEL_UNAVAILABLE",
+        "MODEL_HTTP_ERROR",
+        "MODEL_RESPONSE_TOO_LARGE",
+    }
+)
 NOTE_HEADER = "[이전 재현 시도] 아래 계획은 결론을 내지 못했습니다. 다른 해석·경로로 시도하세요."
 NOTE_MAX_STEPS = 20
 NOTE_MAX_TARGET = 200
@@ -166,12 +229,16 @@ async def auto_fresh(session: AsyncSession, job_id: str) -> str | None:
             job = await session.get(ValidationJob, job_id)
             if job is None or job.status != "inconclusive":
                 return None
+            if job.error_code in PROVIDER_ERROR_CODES:
+                return None
             report = await session.get(Report, job.report_id)
             program = await session.get(Program, report.program_id)
             if report.latest_job_id != job.id:
                 return None
             if program.status != "active" or not program.external_ai_allowed:
                 return None
+            if job.has_conditions:
+                return None  # a fresh job would drop the condition matrix
             if job.kind not in AUTO_FRESH_SOURCE_KINDS and not await session.scalar(
                 select(_auto_fresh_of(job.id))
             ):

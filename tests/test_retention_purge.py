@@ -10,7 +10,15 @@ from sqlalchemy import func, select, update
 from app.core.config import get_settings
 from app.core.ids import new_id
 from app.integrations import storage
-from app.models import Artifact, Clarification, IdempotencyRecord, QaResult, Report, ValidationJob
+from app.models import (
+    Artifact,
+    Clarification,
+    IdempotencyRecord,
+    QaResult,
+    Report,
+    ReportDuplicate,
+    ValidationJob,
+)
 from app.models.validation_job import JobEvent
 from app.worker import purge
 from tests.conftest import TEST_DATABASE_URL
@@ -268,6 +276,43 @@ async def test_expired_report_text_scrubbed_stats_kept(db_session):
     )
     assert answers == ""
     assert run_purge()["reports_scrubbed"] == 0  # once only
+
+
+async def add_duplicate(db_session, report_id: str) -> tuple[str, str, object]:
+    """A stored duplicate with a screenshot that has not expired yet."""
+    report = await db_session.get(Report, report_id)
+    path = write(report, "duplicates", "d.png", age=None)
+    artifact_id = await add_artifact(db_session, report, path, expires_in=timedelta(days=5))
+    duplicate_id = new_id()
+    db_session.add(
+        ReportDuplicate(
+            id=duplicate_id,
+            report_id=report_id,
+            org_id=report.org_id,
+            description="010-1234-5678 같은 오류",
+            client_context={"reported_url": "https://x/"},
+            input_artifact_id=artifact_id,
+        )
+    )
+    await db_session.commit()
+    return duplicate_id, artifact_id, path
+
+
+async def test_scrub_removes_duplicates_text_and_screenshots(db_session):
+    old_id, _ = await seed_history(db_session, age_days=31)
+    old_dup, old_artifact, old_path = await add_duplicate(db_session, old_id)
+    new_id_, _ = await seed_history(db_session, age_days=1)
+    new_dup, new_artifact, new_path = await add_duplicate(db_session, new_id_)
+    assert run_purge()["reports_scrubbed"] == 1
+    assert await reload(db_session, ReportDuplicate, old_dup) is None
+    assert await reload(db_session, Artifact, old_artifact) is None
+    assert not old_path.exists()
+    r = await reload(db_session, Report, old_id)
+    assert r.scrubbed_at is not None
+    # Within retention: untouched.
+    assert await reload(db_session, ReportDuplicate, new_dup) is not None
+    assert await reload(db_session, Artifact, new_artifact) is not None
+    assert new_path.exists()
 
 
 async def test_report_within_retention_untouched(db_session):

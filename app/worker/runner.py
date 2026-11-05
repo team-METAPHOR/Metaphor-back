@@ -17,6 +17,9 @@ from pathlib import Path
 import psycopg
 from core_engine import (
     BrowserOptions,
+    ConditionLimits,
+    ConditionsService,
+    GroqModel,
     JobStore,
     OpenAIModel,
     QARequest,
@@ -24,9 +27,11 @@ from core_engine import (
     RunPolicy,
     Screenshot,
 )
+from core_engine.video import find_encoder
 from psycopg.rows import dict_row
 
 from app.integrations import storage
+from app.worker import conditions as matrix
 from app.worker import queue
 from app.worker.main import sync_database_url
 from app.worker.persist import persist_result, sync_events
@@ -92,8 +97,49 @@ def load_session_headers(org_id: str, ref: str | None) -> dict[str, str]:
     return headers
 
 
-def build_service(snapshot: dict, store: JobStore, model, app_version: str | None) -> QAService:
-    policy = RunPolicy(
+CRITIC_PROVIDERS = {"groq": GroqModel.from_env}
+
+
+def build_reviewer():
+    """Operator-chosen plan critic (`QA_CRITIC_PROVIDER`, worker env only), or None when unset.
+
+    A configured critic that can't be built fails the job: it never silently falls back to a
+    single-model run. The engine itself fails a job whose critic call fails."""
+    provider = os.environ.get("QA_CRITIC_PROVIDER", "").strip().lower()
+    if not provider:
+        return None
+    factory = CRITIC_PROVIDERS.get(provider)
+    if factory is None:
+        raise JobInputError("CRITIC_CONFIG_INVALID")
+    try:
+        return factory()
+    except ValueError:
+        # Message may name the env var only; never the key. Code is enough.
+        raise JobInputError("CRITIC_CONFIG_INVALID") from None
+
+
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def video_enabled() -> bool:
+    """Operator switch (`QA_VIDEO_ENABLED`, worker env only). Off unless explicitly set."""
+    return os.environ.get("QA_VIDEO_ENABLED", "").strip().lower() in _TRUE
+
+
+def check_video_encoder() -> bool:
+    """Worker start check: with video on, an encoder must be found. A missing encoder is logged
+    with a stable code; jobs still run and the engine marks each video `unavailable`."""
+    if not video_enabled() or find_encoder():
+        return True
+    logger.error(
+        "VIDEO_ENCODER_UNAVAILABLE: QA_VIDEO_ENABLED is set but no ffmpeg was found "
+        "(set FFMPEG_BINARY or install the core engine video extra)"
+    )
+    return False
+
+
+def build_policy(snapshot: dict) -> RunPolicy:
+    return RunPolicy(
         program_id=snapshot["program_id"],
         scope_revision=snapshot["scope_revision"],
         base_url=snapshot["base_url"],
@@ -102,17 +148,26 @@ def build_service(snapshot: dict, store: JobStore, model, app_version: str | Non
         allow_private_targets=snapshot.get("allow_private_targets", False),
         private_cidrs=tuple(snapshot.get("private_cidrs", ())),
     )
+
+
+def build_service(
+    snapshot: dict, store: JobStore, model, app_version: str | None, reviewer=None
+) -> QAService:
+    policy = build_policy(snapshot)
     options = BrowserOptions(
         width=snapshot["width"],
         height=snapshot["height"],
         app_version=app_version or snapshot["app_version"],
         test_context_id=snapshot["test_context_id"],
         mask_selectors=tuple(snapshot.get("mask_selectors", ())),
+        record_video=video_enabled(),
         session_headers=load_session_headers(
             snapshot["org_id"], snapshot.get("session_secret_ref")
         ),
+        # ponytail: a saved program test account (app/worker/test_accounts.load_test_account)
+        # plugs in here once the engine can log in with id/password; until then it is unused.
     )
-    return QAService(model, policy, store, options=options)
+    return QAService(model, policy, store, options=options, reviewer=reviewer)
 
 
 class Monitor(threading.Thread):
@@ -124,6 +179,10 @@ class Monitor(threading.Thread):
         self.cancelled = threading.Event()
         self.stop = threading.Event()
         self.engine_dir: Path | None = None
+        # Per-condition child engine dirs of a matrix job, in creation order.
+        self.child_dirs: list[Path] = []
+        # Condition retest: ids of the conditions started so far (last = the one running).
+        self.current_condition: list[str] = []
         self._authorized = False
         self._checked_at = 0.0
 
@@ -153,6 +212,10 @@ class Monitor(threading.Thread):
         self._checked_at = time.monotonic()
         if self.engine_dir is not None:
             sync_events(conn, self.job_id, self.engine_dir)
+            if self.child_dirs:
+                matrix.sync_condition_ids(conn, self.job_id, self.engine_dir)
+        for child in list(self.child_dirs):
+            sync_events(conn, self.job_id, child, source=child.name)
 
     def run(self) -> None:
         try:
@@ -217,18 +280,35 @@ def engine_description(job: dict, report: dict) -> str:
     return description[:ENGINE_DESCRIPTION_LIMIT]
 
 
-async def _call_engine(service: QAService, data: dict, reset, monitor: Monitor):
+async def _call_engine(service, data: dict, reset, monitor: Monitor):
     job, report = data["job"], data["report"]
     callbacks = {
         "reset": reset,
         "is_authorized": monitor.is_authorized,
         "cancelled": monitor.cancelled,
     }
+    snapshot = job["scope_snapshot"]
+    if isinstance(service, ConditionsService) and job["kind"] == "retest":
+        return await matrix.retest_all(
+            service,
+            data["source_engine_id"],
+            snapshot["retest_condition_ids"],
+            on_start=monitor.current_condition.append,
+            **callbacks,
+        )
+    if isinstance(service, ConditionsService):
+        return await service.run(
+            _request(job, report, data), **callbacks, select=snapshot["condition_select"]
+        )
     if job["kind"] == "resume":
         return await service.resume(data["source_engine_id"], job["answers"], **callbacks)
     if job["kind"] == "retest":
         return await service.retest(data["source_engine_id"], **callbacks)
-    request = QARequest(
+    return await service.run(_request(job, report, data), **callbacks)
+
+
+def _request(job: dict, report: dict, data: dict) -> QARequest:
+    return QARequest(
         report_id=report["id"],
         program_id=report["program_id"],
         entry_url=report["target_url"],
@@ -237,17 +317,19 @@ async def _call_engine(service: QAService, data: dict, reset, monitor: Monitor):
         expected_result=report["expected_result"],
         test_data=report["test_data"],
     )
-    return await service.run(request, **callbacks)
 
 
-def execute_job(job_id: str, *, model=None) -> None:
+_FROM_ENV = object()
+
+
+def execute_job(job_id: str, *, model=None, reviewer=_FROM_ENV) -> None:
     """Run one claimed job to a terminal state. Never leaves it running on any failure."""
     with psycopg.connect(sync_database_url(), autocommit=True) as conn:
         data = _load(conn, job_id)
         if data is None:
             return  # cancelled/reaped before we started
         try:
-            _execute(conn, job_id, data, model)
+            _execute(conn, job_id, data, model, reviewer)
         except JobInputError as error:
             queue.finish_if_active(conn, job_id, "failed", error.code)
         except (ValueError, KeyError):
@@ -261,22 +343,43 @@ def execute_job(job_id: str, *, model=None) -> None:
             queue.finish_if_active(conn, job_id, "failed", "WORKER_UNEXPECTED")
 
 
-def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
+def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer) -> None:
     job, report, program = data["job"], data["report"], data["program"]
     snapshot = job["scope_snapshot"]
-    if snapshot["reset_adapter"] not in RESETS:
+    conditions = snapshot.get("conditions") or []
+    if snapshot["reset_adapter"] not in RESETS or any(
+        c["reset_adapter"] not in RESETS for c in conditions
+    ):
         raise JobInputError("RESET_ADAPTER_UNKNOWN")
+    if conditions and job["kind"] == "resume":
+        # The engine has no matrix resume; the API never queues one.
+        raise JobInputError("CONDITION_KIND_UNSUPPORTED")
+    condition_retest = bool(conditions) and job["kind"] == "retest"
     root = storage.safe_path(report["org_id"], report["id"])
     if job["kind"] in ("resume", "retest"):
         source = data["source_engine_id"]
         needed = BASELINE_FILES if job["kind"] == "retest" else RESUME_FILES
+        if condition_retest:
+            needed = ("result.json",)  # the matrix result; children are read by the engine
         if not source or not all((root / source / name).is_file() for name in needed):
             # e.g. a worker without the shared volume, or files removed by retention.
             raise JobInputError("BASELINE_ARTIFACTS_MISSING")
+    if reviewer is _FROM_ENV:
+        reviewer = build_reviewer()
     reset = RESETS[snapshot["reset_adapter"]](snapshot)
     monitor = Monitor(job_id, program["id"], job["scope_revision"])
 
     def bind(engine_job_id: str) -> None:
+        # Matrix job: the first engine job is the matrix itself, every later one a condition
+        # child (own dir, own event sequence), mapped in validation_job_conditions.
+        # A condition retest has no matrix engine job: every engine job is a child.
+        if conditions and (monitor.engine_dir is not None or condition_retest):
+            current = monitor.current_condition[-1] if condition_retest else None
+            if not matrix.bind_child(conn, job_id, engine_job_id, current):
+                logger.warning("orphan engine dir %s for job %s", engine_job_id, job_id)
+                raise JobInputError("ENGINE_BIND_FAILED")
+            monitor.child_dirs.append(root / engine_job_id)
+            return
         cur = conn.execute(
             "UPDATE validation_jobs SET engine_job_id = %s "
             "WHERE id = %s AND status IN ('running', 'cancelling') AND engine_job_id IS NULL",
@@ -288,13 +391,31 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         monitor.engine_dir = root / engine_job_id
 
     store = BoundJobStore(root, bind)
-    service = build_service(snapshot, store, model or OpenAIModel.from_env(), job["app_version"])
+    model = model or OpenAIModel.from_env()
+    if conditions:
+        service = ConditionsService(
+            model,
+            build_policy(snapshot),
+            store,
+            matrix.build_conditions(snapshot, job["app_version"], load_session_headers),
+            reviewer=reviewer,
+            limits=ConditionLimits(max_conditions=snapshot["max_conditions"]),
+        )
+        reset = matrix.condition_reset(snapshot, RESETS)
+        contexts = sorted({c["test_context_id"] for c in conditions})
+    else:
+        service = build_service(snapshot, store, model, job["app_version"], reviewer)
+        contexts = [snapshot["test_context_id"]]
 
-    # Jobs sharing a synthetic account/data set run one at a time.
+    # Jobs sharing a synthetic account/data set run one at a time. A matrix job holds every
+    # context it may use, taken in sorted order so two matrix jobs can't deadlock.
     # ponytail: per-context serialization; split data spaces if throughput matters.
-    lock_key = context_lock_key(snapshot["org_id"], snapshot["test_context_id"])
     with psycopg.connect(sync_database_url(), autocommit=True) as lock_conn:
-        lock_conn.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (lock_key,))
+        for context in contexts:
+            lock_conn.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                (context_lock_key(snapshot["org_id"], context),),
+            )
         monitor.refresh(conn)
         monitor.start()
         try:
@@ -309,10 +430,11 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model) -> None:
         asdict(result),
         org_id=report["org_id"],
         report_id=report["id"],
-        engine_dir=root / result.job_id,
+        engine_dir=root / result.job_id if result.job_id else None,
         retention_days=program["retention_days"],
+        child_dirs=tuple(root / child for child in matrix.child_ids(conn, job_id)),
     )
-    if persisted and result.status == "inconclusive":
+    if persisted and result.status == "inconclusive" and not conditions:
         _run_auto_fresh(job_id)
 
 

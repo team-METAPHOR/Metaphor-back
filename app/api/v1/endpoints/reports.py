@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, Header, Query, UploadFile
@@ -9,12 +10,15 @@ from app.schemas.report import (
     ClarificationCreate,
     JobQueued,
     JobRequest,
+    Progress,
     ReportCreated,
     ReportDetail,
+    ReportDuplicateList,
     ReportList,
     WorkflowUpdate,
 )
-from app.services import clarifications, rerun
+from app.schemas.validation_job import JobList
+from app.services import clarifications, report_duplicates, rerun, validation_jobs
 from app.services import reports as service
 from app.services.intake import read_upload_capped
 
@@ -58,7 +62,18 @@ async def list_reports(
     source: Literal["platform", "widget"] | None = None,
     program_id: str | None = None,
     assignee: Annotated[str | None, Query(max_length=64, description='"me" or a user id')] = None,
+    progress: Annotated[list[Progress] | None, Query()] = None,
+    include_closed: bool = False,
+    created_from: Annotated[datetime | None, Query(alias="from")] = None,
+    created_to: Annotated[datetime | None, Query(alias="to")] = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    page: Annotated[int | None, Query(ge=1)] = None,
+    sort: Literal["created_desc", "created_asc"] = "created_desc",
 ):
+    """Closed reports are hidden unless `include_closed=true` or `progress=closed`.
+    `from` is inclusive, `to` exclusive (created_at). Without `cursor` the response is
+    page-numbered (`page`, `total`). `sort`: `created_desc` (default) or `created_asc`; a
+    cursor must be reused with the same `sort`."""
     return await service.list_reports(
         db,
         user.id,
@@ -67,12 +82,33 @@ async def list_reports(
         source=source,
         program_id=program_id,
         assignee=assignee,
+        progress=progress,
+        include_closed=include_closed,
+        created_from=created_from,
+        created_to=created_to,
+        q=q,
+        page=page,
+        sort=sort,
     )
 
 
 @router.get("/{report_id}", response_model=ReportDetail)
 async def get_report(report_id: str, user: CurrentUser, db: DbSession):
     return await service.get_report(db, user.id, report_id)
+
+
+@router.get("/{report_id}/duplicates", response_model=ReportDuplicateList)
+async def list_duplicates(
+    report_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: str | None = None,
+):
+    """Widget submissions merged into this report, newest first (cursor-paged)."""
+    return await report_duplicates.list_duplicates(
+        db, user.id, report_id, limit=limit, cursor=cursor
+    )
 
 
 @router.patch("/{report_id}/workflow", response_model=ReportDetail)
@@ -99,6 +135,20 @@ async def answer_question(
         db, user.id, report_id, body.source_job_id, body.answers, idempotency_key
     )
     return JSONResponse(payload, status_code=status)
+
+
+@router.get("/{report_id}/validation-jobs", response_model=JobList)
+async def list_report_jobs(
+    report_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: str | None = None,
+):
+    """All runs of the report, newest first (cursor-paged)."""
+    return await validation_jobs.list_report_jobs(
+        db, user.id, report_id, limit=limit, cursor=cursor
+    )
 
 
 @router.post("/{report_id}/validation-jobs", status_code=202, response_model=JobQueued)

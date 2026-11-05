@@ -8,6 +8,8 @@ from app.api.v1.endpoints import (
     orgs,
     programs,
     reports,
+    test_accounts,
+    test_conditions,
     validation_jobs,
     widget,
     widget_settings,
@@ -23,7 +25,9 @@ platform_router = APIRouter(dependencies=[Depends(require_csrf)])
 platform_router.include_router(auth.router)
 platform_router.include_router(orgs.router)
 platform_router.include_router(programs.router)
+platform_router.include_router(test_conditions.router)
 platform_router.include_router(widget_settings.router)
+platform_router.include_router(test_accounts.router)
 platform_router.include_router(reports.router)
 platform_router.include_router(validation_jobs.router)
 platform_router.include_router(evidence.router)

@@ -9,7 +9,7 @@ from app.models import Program, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
 from app.repositories import widget_settings as repo
 from app.schemas.widget import WidgetSettingsPatch
-from app.services.access import require_org_role
+from app.services.access import ADMIN_ROLES, READ_ROLES, require_org_role
 from app.services.audit import record_audit
 
 _TOGGLES = (
@@ -19,7 +19,6 @@ _TOGGLES = (
     "live_screenshot_enabled",
 )
 _LOCAL_HOSTS = {"localhost", "127.0.0.1"}
-_READ_ROLES = ("developer", "reviewer", "admin")
 
 
 def new_project_key() -> str:
@@ -75,7 +74,7 @@ async def _row_for_update(db: AsyncSession, program_id: str) -> ProgramWidgetSet
 async def get_settings(db: AsyncSession, user_id: str, program_id: str):
     """Return (row or None for defaults, current base_url)."""
     async with db.begin():
-        program = await _program(db, user_id, program_id, *_READ_ROLES)
+        program = await _program(db, user_id, program_id, *READ_ROLES)
         revision = await programs_repo.get_revision(db, program)
         return await repo.get(db, program_id), revision.base_url
 
@@ -91,7 +90,7 @@ async def update_settings(
             dict.fromkeys(normalize_origin(o) for o in changes["allowed_origins"])
         )
     async with db.begin():
-        program = await _program(db, user_id, program_id, "admin", lock=True)
+        program = await _program(db, user_id, program_id, *ADMIN_ROLES, lock=True)
         row = await _row_for_update(db, program_id)
         changed = sorted(f for f, v in changes.items() if getattr(row, f) != v)
         for field in changed:
@@ -130,7 +129,7 @@ async def rotate_key(db: AsyncSession, user_id: str, program_id: str) -> str:
     rotation.
     """
     async with db.begin():
-        program = await _program(db, user_id, program_id, "admin", lock=True)
+        program = await _program(db, user_id, program_id, *ADMIN_ROLES, lock=True)
         row = await _row_for_update(db, program_id)
         row.public_project_key = new_project_key()
         # The key is public, but it is still kept out of the audit trail.

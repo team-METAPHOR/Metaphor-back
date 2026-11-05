@@ -3,7 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from app.api.dependencies import CurrentUser, DbSession
-from app.schemas.validation_job import EventList, JobCancelled, JobOut, JobResult
+from app.schemas.validation_job import (
+    ConditionResultList,
+    EventList,
+    JobCancelled,
+    JobOut,
+    JobResult,
+)
+from app.services import condition_results
 from app.services import validation_jobs as service
 
 router = APIRouter(prefix="/validation-jobs", tags=["validation-jobs"])
@@ -17,6 +24,13 @@ async def get_job(job_id: str, user: CurrentUser, db: DbSession):
 @router.get("/{job_id}/result", response_model=JobResult)
 async def get_result(job_id: str, user: CurrentUser, db: DbSession):
     return await service.get_result(db, user.id, job_id)
+
+
+@router.get("/{job_id}/conditions", response_model=ConditionResultList)
+async def list_conditions(job_id: str, user: CurrentUser, db: DbSession):
+    """Per-condition results of a condition-matrix job (409 NOT_CONDITION_JOB otherwise).
+    `most_progressed_condition_ids` counts completed steps; it is not symptom similarity."""
+    return await condition_results.list_condition_results(db, user.id, job_id)
 
 
 @router.get("/{job_id}/events", response_model=EventList)

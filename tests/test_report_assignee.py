@@ -12,8 +12,9 @@ async def world(client, db_session):
     program = await make_program(db_session, org)
     await db_session.commit()
     admin, admin_h = await login_as(client, db_session, org, "admin")
-    reviewer, reviewer_h = await login_as(client, db_session, org, "reviewer")
+    triager, triager_h = await login_as(client, db_session, org, "developer")
     dev, dev_h = await login_as(client, db_session, org, "developer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
     dev.display_name = "개발자"
     await db_session.commit()
     body = (await submit(client, dev_h, program.id, description="버그")).json()
@@ -22,11 +23,12 @@ async def world(client, db_session):
         "program": program,
         "report_id": body["id"],
         "admin": admin,
-        "reviewer": reviewer,
+        "triager": triager,
         "dev": dev,
         "admin_h": admin_h,
-        "reviewer_h": reviewer_h,
+        "triager_h": triager_h,
         "dev_h": dev_h,
+        "viewer_h": viewer_h,
     }
 
 
@@ -34,7 +36,7 @@ async def assign(client, world, user_id, headers=None, report_id=None):
     return await client.patch(
         f"/api/v1/reports/{report_id or world['report_id']}/assignee",
         json={"user_id": user_id},
-        headers=headers or world["reviewer_h"],
+        headers=headers or world["triager_h"],
     )
 
 
@@ -89,7 +91,7 @@ async def test_non_member_assignee_422_same_message(client, db_session, world):
 
 
 async def test_roles_and_cross_org(client, db_session, world):
-    assert (await assign(client, world, world["dev"].id, world["dev_h"])).status_code == 403
+    assert (await assign(client, world, world["dev"].id, world["viewer_h"])).status_code == 403
     other = await make_org(db_session, "Other")
     await db_session.commit()
     _, other_admin_h = await login_as(client, db_session, other, "admin")
@@ -124,7 +126,7 @@ async def test_assignee_filter_me_and_user_id_with_cursor(client, db_session, wo
         )
     for report_id in ids[:3]:
         await assign(client, world, world["dev"].id, report_id=report_id)
-    await assign(client, world, world["reviewer"].id, report_id=ids[3])
+    await assign(client, world, world["triager"].id, report_id=ids[3])
 
     h = world["dev_h"]
     page = (await client.get("/api/v1/reports?assignee=me&limit=2", headers=h)).json()
@@ -138,13 +140,13 @@ async def test_assignee_filter_me_and_user_id_with_cursor(client, db_session, wo
     mine = {i["id"] for i in page["items"] + rest["items"]}
     assert mine == set(ids[:3])
 
-    by_id = (await client.get(f"/api/v1/reports?assignee={world['reviewer'].id}", headers=h)).json()
+    by_id = (await client.get(f"/api/v1/reports?assignee={world['triager'].id}", headers=h)).json()
     assert [i["id"] for i in by_id["items"]] == [ids[3]]
-    reviewer_me = (
-        await client.get("/api/v1/reports?assignee=me", headers=world["reviewer_h"])
+    triager_me = (
+        await client.get("/api/v1/reports?assignee=me", headers=world["triager_h"])
     ).json()
-    assert [i["id"] for i in reviewer_me["items"]] == [ids[3]]
+    assert [i["id"] for i in triager_me["items"]] == [ids[3]]
     admin_me = (await client.get("/api/v1/reports?assignee=me", headers=world["admin_h"])).json()
     assert admin_me["items"] == []
     report = await db_session.get(Report, ids[3], populate_existing=True)
-    assert report.assignee_id == world["reviewer"].id
+    assert report.assignee_id == world["triager"].id

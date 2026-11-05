@@ -1,15 +1,17 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.test_condition import ConditionId
 from app.schemas.validation_job import JobBrief
 
 
 class ReportCreated(BaseModel):
     id: str
     program_id: str
-    validation_job_id: str
+    # null with status "waiting_quota": stored over the daily quota, no job until a rerun.
+    validation_job_id: str | None
     status: str
     created_at: datetime
 
@@ -24,25 +26,41 @@ class Assignee(BaseModel):
     active: bool
 
 
-Progress = Literal["new", "reproducing", "reproduced", "triaged", "fixing", "dismissed", "closed"]
+Progress = Literal[
+    "new",
+    "reproducing",
+    "reproduced",
+    "triaged",
+    "verified",
+    "waiting_quota",
+    "fixing",
+    "dismissed",
+    "closed",
+]
 
 
 class ReportItem(BaseModel):
-    """`progress` is the dashboard stage, computed from `workflow_status` and the latest job:
+    """`progress` is the dashboard stage, computed from `workflow_status`, `fix_verified` and
+    the latest job (first matching row wins):
 
     | workflow_status | latest job                                    | progress      |
     |-----------------|-----------------------------------------------|---------------|
     | closed          | (any)                                         | `closed`      |
     | dismissed       | (any)                                         | `dismissed`   |
+    | received/fixing | (any), with `fix_verified`                    | `verified`    |
     | fixing          | (any)                                         | `fixing`      |
+    | received        | none, `run_blocked = quota` (parked)          | `waiting_quota` |
     | received        | none                                          | `new`         |
     | received        | queued / running / cancelling                 | `reproducing` |
     | received        | finished, verdict `reproduced`                | `reproduced`  |
     | received        | finished, any other verdict or none           | `triaged`     |
 
-    Finished = completed / inconclusive / needs_info / failed / cancelled. Dashboard stages:
+    Finished = completed / inconclusive / needs_info / failed / cancelled. `fix_verified` = the
+    latest *finished* job is a retest that ended completed + not_reproduced. Dashboard stages:
     new → 신규 신고, reproducing → 재현 중, reproduced/triaged → 재현 완료, fixing → 버그 수정 중,
-    closed → 마감 (only after a passing retest). dismissed is a manual side exit.
+    verified → 수정 확인됨 (awaiting a manual close), waiting_quota → 한도 대기 (stored over
+    the daily quota; a rerun `fresh` starts it), closed → 마감 (closed by a person, only
+    once the fix is verified). dismissed is a manual side exit.
     """
 
     id: str
@@ -56,16 +74,100 @@ class ReportItem(BaseModel):
     duplicate_count: int
     workflow_status: str
     progress: Progress
+    # Latest finished job is a passing retest; required to close (PATCH workflow "closed").
+    fix_verified: bool
     closed_at: datetime | None
     # Shown as is even if the user was later deactivated or left the org.
     assignee: Assignee | None
     latest_job: JobBrief | None
     created_at: datetime
+    # Start of the newest stored duplicate's redacted description (widget only), else null.
+    latest_duplicate_excerpt: str | None = None
+
+
+class RequiredAction(BaseModel):
+    code: str
+    message: str
+
+
+class BestAttempt(BaseModel):
+    """Latest finished job's stored engine result, as redacted plain text (never HTML)."""
+
+    job_id: str
+    verdict: str | None
+    reason_code: str | None
+    summary: str | None
+    hypothesis: str | None
 
 
 class ReportList(BaseModel):
+    """Cursor mode (`cursor` given): `total`/`page` are null. Otherwise page mode: `page` is
+    the 1-based page and `total` the number of matching reports. `next_cursor` is always set
+    when more rows follow, so a page-mode client can also continue with the cursor."""
+
     items: list[ReportItem]
     next_cursor: str | None
+    total: int | None = None
+    page: int | None = None
+
+
+class ReportDuplicateItem(BaseModel):
+    """A widget submission merged into this report (same error fingerprint within 24 h).
+    `description` is redacted plain text; `client_context` is the same whitelisted SDK
+    metadata the report itself keeps. The screenshot (masked) downloads through
+    `GET /evidence/{input_artifact_id}/download`."""
+
+    id: str
+    received_at: datetime
+    description: str
+    has_screenshot: bool
+    input_artifact_id: str | None
+    client_context: dict | None
+
+
+class ReportDuplicateList(BaseModel):
+    """Newest first. Only the first stored duplicates are kept (see `duplicate_count` for
+    the total); the list is empty once the report's retention scrub ran."""
+
+    items: list[ReportDuplicateItem]
+    next_cursor: str | None
+
+
+class AttentionItem(BaseModel):
+    id: str
+    number: int
+    title: str
+    progress: Progress
+    # First required action, or null (e.g. reproduced and only needs review).
+    reason: RequiredAction | None = None
+
+
+class ReportSummary(BaseModel):
+    """All of the org's reports (closed included), counted by `progress`; every value is
+    present, zero when none. `needs_attention`: newest 5 reports that are reproduced, parked
+    over the quota (waiting_quota), or still `received` with a required action from the latest
+    finished job (see `required_actions`)."""
+
+    counts: dict[str, int]
+    needs_attention: list[AttentionItem]
+
+
+class PageCount(BaseModel):
+    path: str
+    count: int
+
+
+class ReportStats(BaseModel):
+    """Over jobs/reports created in [`window_from`, `window_to`) (at most 90 days); `days` is
+    its length rounded up."""
+
+    days: int
+    window_from: datetime
+    window_to: datetime
+    auto_reproduction_rate: float | None
+    avg_reproduction_seconds: float | None
+    fix_verified_count: int
+    by_page: list[PageCount]
 
 
 class ReportDetail(ReportItem):
@@ -78,14 +180,16 @@ class ReportDetail(ReportItem):
     client_context: dict | None = None
     # True once the retention purge blanked the text fields (they read as "").
     scrubbed: bool = False
+    required_actions: list[RequiredAction] = []
+    best_attempt: BestAttempt | None = None
 
 
 class WorkflowUpdate(BaseModel):
-    """`closed` is not accepted: only a passing retest closes a report."""
+    """`closed` is accepted only while `fix_verified` is true (else 409 FIX_NOT_VERIFIED)."""
 
     model_config = {"extra": "forbid"}
 
-    status: Literal["received", "fixing", "dismissed"]
+    status: Literal["received", "fixing", "dismissed", "closed"]
 
 
 class AssigneeUpdate(BaseModel):
@@ -117,6 +221,11 @@ class JobRequest(BaseModel):
     mode: Literal["fresh", "retest"]
     baseline_job_id: str | None = None
     app_version: str | None = None
+    # Condition comparison (fresh only): registered condition ids, run in this order, and/or
+    # let the model pick among them (or among all registered ones) up to `max_conditions`.
+    condition_ids: list[ConditionId] | None = Field(default=None, min_length=1, max_length=16)
+    auto_select_conditions: bool = False
+    max_conditions: int | None = Field(default=None, ge=1, le=8)
 
     @model_validator(mode="after")
     def _retest_fields(self):
@@ -124,4 +233,13 @@ class JobRequest(BaseModel):
             raise ValueError("retest requires baseline_job_id and app_version")
         if self.mode == "fresh" and (self.baseline_job_id or self.app_version):
             raise ValueError("fresh takes no baseline_job_id or app_version")
+        conditions = self.condition_ids or self.auto_select_conditions or self.max_conditions
+        if self.mode == "retest" and conditions:
+            raise ValueError("retest reuses the baseline's conditions")
+        if self.condition_ids and len(set(self.condition_ids)) != len(self.condition_ids):
+            raise ValueError("condition_ids must be unique")
+        if self.condition_ids and not self.auto_select_conditions and len(self.condition_ids) > 8:
+            raise ValueError("at most 8 conditions run in one job")
+        if self.max_conditions and not (self.condition_ids or self.auto_select_conditions):
+            raise ValueError("max_conditions needs condition_ids or auto_select_conditions")
         return self

@@ -12,8 +12,16 @@ from app.models.identity import (
     User,
 )
 from app.models.program import OriginVerification, Program, ProgramScopeRevision
-from app.models.report import Clarification, Report
-from app.models.validation_job import JobEvent, ModelUsage, QaResult, ValidationJob
+from app.models.report import Clarification, Report, ReportDuplicate
+from app.models.test_account import ProgramTestAccount
+from app.models.test_condition import ProgramTestCondition
+from app.models.validation_job import (
+    JobEvent,
+    ModelUsage,
+    QaResult,
+    ValidationJob,
+    ValidationJobCondition,
+)
 from app.models.widget import ProgramWidgetSettings
 
 __all__ = [
@@ -31,10 +39,14 @@ __all__ = [
     "PlatformOperator",
     "Program",
     "ProgramScopeRevision",
+    "ProgramTestAccount",
+    "ProgramTestCondition",
     "ProgramWidgetSettings",
     "QaResult",
     "Report",
+    "ReportDuplicate",
     "Session",
     "User",
     "ValidationJob",
+    "ValidationJobCondition",
 ]

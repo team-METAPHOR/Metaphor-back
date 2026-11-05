@@ -241,3 +241,76 @@ async def test_registered_ids_snapshot_on_fresh_job(client, db_session):
     await db_session.commit()
     job = await db_session.get(ValidationJob, job.id, populate_existing=True)
     assert job.scope_snapshot["conditions"][0]["label"] == "직원"
+
+
+async def test_conditions_api_lists_rows_and_hides_other_orgs(
+    client, db_session, conn, monkeypatch
+):
+    from tests.factories import login_as, make_org
+
+    job_id = await matrix_job(
+        db_session,
+        conn,
+        [
+            entry("admin", "admin-1"),
+            entry("staff", "staff-1", session_secret_ref="STAFF"),
+            entry("guest", "guest-1"),
+        ],
+        max_conditions=3,
+    )
+    org_id = conn.execute("SELECT org_id FROM validation_jobs WHERE id = %s", (job_id,)).fetchone()[
+        0
+    ]
+    monkeypatch.setenv(f"QA_SESSION_{org_id.upper()}_STAFF", '{"Cookie": "sid=s"}')
+    run = condition_run(
+        {"admin-1": "not_reproduced", "staff-1": "reproduced", "guest-1": "inconclusive"},
+        cancel_after="staff-1",
+    )
+    monkeypatch.setattr(runner.QAService, "run", run)
+    await asyncio.to_thread(runner.execute_job, job_id, model=ScriptedModel([]), reviewer=None)
+
+    from app.models import Organization
+
+    org = await db_session.get(Organization, org_id)
+    _, viewer = await login_as(client, db_session, org, "viewer")
+    other = await make_org(db_session, name="Other")
+    _, outsider = await login_as(client, db_session, other, "admin")
+
+    job = await client.get(f"/api/v1/validation-jobs/{job_id}", headers=viewer)
+    assert job.json()["has_conditions"] is True
+    response = await client.get(f"/api/v1/validation-jobs/{job_id}/conditions", headers=viewer)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [(i["index"], i["condition_id"], i["outcome"]) for i in body["items"]] == [
+        (1, "admin", "not_reproduced"),
+        (2, "staff", "reproduced"),
+        (3, "guest", "not_run"),
+    ]
+    assert (body["attempted"], body["reproduced"]) == (2, 1)
+    assert body["matched_condition_ids"] == ["staff"]
+    assert body["progress_basis"] == "completed_steps_only_not_symptom_similarity"
+    staff = body["items"][1]
+    assert staff["condition"]["has_session"] is True and staff["stop_point"] == "3/4단계 완료"
+    assert isinstance(staff["duration_ms"], int)
+    assert "STAFF" not in response.text and "session_secret_ref" not in response.text
+
+    hidden = await client.get(f"/api/v1/validation-jobs/{job_id}/conditions", headers=outsider)
+    assert hidden.status_code == 404
+
+
+def test_stop_point_drops_query_strings():
+    from app.services.condition_results import stop_point
+
+    row = {
+        "diagnosis": {
+            "attempts": [
+                {
+                    "completed_steps": 1,
+                    "total_steps": 3,
+                    "blocker": "SELECTOR_NOT_FOUND",
+                    "next_step": {"action": "navigate", "target": "https://a.test/p?token=x"},
+                }
+            ]
+        }
+    }
+    assert stop_point(row) == "1/3단계 후 중단 (SELECTOR_NOT_FOUND): navigate /p"

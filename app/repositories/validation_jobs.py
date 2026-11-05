@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import JobEvent, QaResult, ValidationJob
+from app.models import JobEvent, QaResult, ValidationJob, ValidationJobCondition
 
 
 async def get(db: AsyncSession, job_id: str) -> ValidationJob | None:
@@ -42,4 +42,13 @@ async def list_for_report(
                 and_(ValidationJob.created_at == moment, ValidationJob.id < last_id),
             )
         )
+    return list((await db.scalars(query)).all())
+
+
+async def condition_rows(db: AsyncSession, job_id: str) -> list[ValidationJobCondition]:
+    query = (
+        select(ValidationJobCondition)
+        .where(ValidationJobCondition.job_id == job_id)
+        .order_by(ValidationJobCondition.ordinal)
+    )
     return list((await db.scalars(query)).all())

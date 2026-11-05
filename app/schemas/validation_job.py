@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -22,6 +23,7 @@ class JobOut(BaseModel):
     human_review_required: bool
     parent_job_id: str | None
     baseline_job_id: str | None
+    has_conditions: bool  # condition matrix job: per-condition rows at /conditions
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -58,3 +60,44 @@ class EventList(BaseModel):
 class JobCancelled(BaseModel):
     id: str
     status: str  # "cancelled" (was queued) or "cancelling" (worker stopping it)
+
+
+ConditionOutcome = Literal[
+    "reproduced", "not_reproduced", "blocked", "inconclusive", "not_run", "running"
+]
+
+
+class ConditionInfo(BaseModel):
+    """The registered condition as frozen in the job snapshot (no session reference)."""
+
+    label: str
+    browser_name: str
+    width: int
+    height: int
+    response_delay_ms: int
+    test_context_id: str
+    record_video: bool
+    has_session: bool
+
+
+class ConditionResultItem(BaseModel):
+    index: int  # 1-based run order
+    condition_id: str
+    condition: ConditionInfo | None
+    outcome: ConditionOutcome
+    status: str
+    verdict: str | None
+    error_code: str | None
+    stop_point: str | None  # plain text; never contains query strings or typed values
+    duration_ms: int | None
+
+
+class ConditionResultList(BaseModel):
+    items: list[ConditionResultItem]
+    attempted: int  # conditions that actually ran (not `not_run`)
+    reproduced: int
+    matched_condition_ids: list[str]
+    # Conditions with the most completed steps. Step count only, NOT symptom similarity.
+    most_progressed_condition_ids: list[str]
+    progress_basis: str
+    not_selected_condition_ids: list[str]

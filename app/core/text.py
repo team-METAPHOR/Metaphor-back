@@ -57,6 +57,11 @@ def redact(text: str) -> str:
     return _ACCOUNT.sub(_account, text)
 
 
+def strip_query(path: str) -> str:
+    """Drop the query string and fragment."""
+    return path.split("#", 1)[0].split("?", 1)[0]
+
+
 def redact_tree(value):
     """`redact` every string inside dicts/lists; keys and non-string values are kept."""
     if isinstance(value, str):

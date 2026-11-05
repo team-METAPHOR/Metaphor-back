@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,6 +77,96 @@ class Environment(_Payload):
 class Consent(_Payload):
     environment: bool = False
     screenshot: bool = False
+    activity: bool = False  # required to send `breadcrumbs`
+
+
+# --- breadcrumbs: the reporter's recent actions -----------------------------
+# Whitelisted per type; unknown fields (e.g. an input `value`) are rejected. The server
+# sanitizes again before storing (app/services/breadcrumbs.py).
+
+MAX_BREADCRUMBS = 50
+BREADCRUMB_WINDOW_MS = 600_000
+
+
+def _text(limit: int):
+    return Field(default=None, max_length=limit)
+
+
+class _Crumb(_Payload):
+    # Milliseconds relative to submit time (0 = the moment of submitting).
+    t: int = Field(ge=-BREADCRUMB_WINDOW_MS, le=0)
+
+
+class NavigationCrumb(_Crumb):
+    type: Literal["navigation"]
+    path: str | None = _text(512)
+
+
+class ClickCrumb(_Crumb):
+    type: Literal["click"]
+    tag: str | None = _text(32)
+    role: str | None = _text(32)
+    text: str | None = _text(80)
+    testid: str | None = _text(80)
+    selector: str | None = _text(200)
+
+
+class InputCrumb(_Crumb):
+    # Never the value: only what kind of field changed and how long the value is.
+    type: Literal["input"]
+    tag: str | None = _text(32)
+    input_type: str | None = _text(32)
+    label: str | None = _text(80)
+    testid: str | None = _text(80)
+    selector: str | None = _text(200)
+    checked: bool | None = None
+    selected_text: str | None = _text(80)
+    length: int | None = Field(default=None, ge=0, le=10_000)
+
+
+class SubmitCrumb(_Crumb):
+    type: Literal["submit"]
+    label: str | None = _text(80)
+    testid: str | None = _text(80)
+    selector: str | None = _text(200)
+
+
+class KeyCrumb(_Crumb):
+    type: Literal["key"]
+    key: (
+        Literal[
+            "Enter",
+            "Escape",
+            "Tab",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Backspace",
+        ]
+        | None
+    ) = None
+
+
+class RequestCrumb(_Crumb):
+    # Method, path, status and timing only: no headers, cookies or bodies exist here.
+    type: Literal["request"]
+    method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] | None = None
+    path: str | None = _text(512)
+    status: int | None = Field(default=None, ge=100, le=599)
+    # `status` is omitted when the request failed or was aborted (no HTTP response).
+    duration_ms: int | None = Field(default=None, ge=0, le=BREADCRUMB_WINDOW_MS)
+
+
+class ErrorCrumb(_Crumb):
+    type: Literal["error"]
+    message: str | None = _text(200)
+
+
+Breadcrumb = Annotated[
+    NavigationCrumb | ClickCrumb | InputCrumb | SubmitCrumb | KeyCrumb | RequestCrumb | ErrorCrumb,
+    Field(discriminator="type"),
+]
 
 
 class WidgetReportPayload(_Payload):
@@ -88,6 +178,7 @@ class WidgetReportPayload(_Payload):
     environment: Environment | None = None
     mask_boxes: list[list[int]] | None = Field(default=None, max_length=20)
     consent: Consent = Consent()
+    breadcrumbs: list[Breadcrumb] | None = Field(default=None, max_length=MAX_BREADCRUMBS)
 
 
 class AutoDetect(BaseModel):

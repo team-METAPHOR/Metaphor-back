@@ -12,12 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.core.hashing import CLIENT_IP, keyed_hash
-from app.core.text import redact, sanitize_text
+from app.core.text import redact, sanitize_text, strip_query
 from app.models import Program, ProgramScopeRevision, ProgramWidgetSettings
 from app.repositories import programs as programs_repo
 from app.repositories import widget as repo
 from app.repositories import widget_settings as settings_repo
 from app.schemas.widget import WidgetReportPayload
+from app.services.breadcrumbs import SECTION_BUDGET, clean_breadcrumbs, render_breadcrumbs
 from app.services.idempotency import run_once
 from app.services.intake import (
     MAX_MASK_BOXES,
@@ -32,7 +33,8 @@ from app.services.report_duplicates import record_duplicate
 from app.services.reports import TEXT_LIMITS, create_report
 from app.services.widget_settings import normalize_origin, origin_kind
 
-MAX_PAYLOAD_BYTES = 32 * 1024
+# 50 breadcrumbs at full length plus an 8000-char description fit with room to spare.
+MAX_PAYLOAD_BYTES = 128 * 1024
 MAX_DESCRIPTION = TEXT_LIMITS["description"]
 SDK_HEADER = "\n\n[SDK 감지 정보]\n"
 # ponytail: fixed limits; per-customer settings when someone asks.
@@ -143,10 +145,6 @@ def _clean(value: str | None, limit: int) -> str:
     return sanitize_text(value or "", limit)
 
 
-def _strip_query(path: str) -> str:
-    return path.split("#", 1)[0].split("?", 1)[0]
-
-
 def _clean_stack(stack_top: str | None) -> str | None:
     # "https://host/app.js?v=1:120:15" → drop the query but keep ":line:col".
     if not stack_top:
@@ -167,7 +165,7 @@ def _client_context(body: WidgetReportPayload, reported_url: str, query_stripped
             if error.http is None
             else {
                 "method": error.http.method,
-                "path": _clean(_strip_query(error.http.path), 2048),
+                "path": _clean(strip_query(error.http.path), 2048),
                 "status": error.http.status,
             },
         }
@@ -183,7 +181,9 @@ def _client_context(body: WidgetReportPayload, reported_url: str, query_stripped
 
 
 def engine_description(user_text: str, body: WidgetReportPayload, context: dict) -> str:
-    """User text + redacted SDK summary, capped at the engine description limit."""
+    """User text + redacted SDK summary + recent actions, capped at the engine description
+    limit. The user's text comes first and is never cut; the action list shrinks (oldest
+    first) to fit."""
     lines = []
     if body.error_type != "manual":
         lines.append(f"오류 유형: {body.error_type}")
@@ -200,9 +200,13 @@ def engine_description(user_text: str, body: WidgetReportPayload, context: dict)
             lines.append(f"UA: {env['user_agent']}")
         if env["viewport"]:
             lines.append(f"viewport: {env['viewport']['width']}x{env['viewport']['height']}")
-    if not lines:
-        return user_text
-    return (user_text + SDK_HEADER + "\n".join(lines))[:MAX_DESCRIPTION]
+    text = user_text + (SDK_HEADER + "\n".join(lines) if lines else "")
+    if context.get("breadcrumbs"):
+        budget = min(SECTION_BUDGET, MAX_DESCRIPTION - len(text) - 2)
+        section = render_breadcrumbs(context["breadcrumbs"], budget) if budget > 0 else ""
+        if section:
+            text += "\n\n" + section
+    return text[:MAX_DESCRIPTION]
 
 
 def fingerprint(program_id: str, body: WidgetReportPayload, context: dict, page_path: str) -> str:
@@ -266,6 +270,8 @@ async def submit_report(
         raise ApiError(422, "CONSENT_REQUIRED", "스크린샷 전송 동의가 필요합니다.")
     if body.environment is not None and not body.consent.environment:
         raise ApiError(422, "CONSENT_REQUIRED", "환경 정보 전송 동의가 필요합니다.")
+    if body.breadcrumbs is not None and not body.consent.activity:
+        raise ApiError(422, "CONSENT_REQUIRED", "최근 동작 전송 동의가 필요합니다.")
     _check_error_details(body)
     if body.mask_boxes and image is None:
         raise ApiError(422, "MASK_BOX_INVALID", "마스킹 영역은 스크린샷과 함께 보내야 합니다.")
@@ -289,8 +295,12 @@ async def submit_report(
                 "운영 화면 스크린샷은 받지 않도록 설정되어 있습니다.",
             )
         target_url, query_stripped = check_target_url(revision, entry_url)
-        reported_url = redact(f"{origin}{_strip_query(page_path)}")
+        reported_url = redact(f"{origin}{strip_query(page_path)}")
         context = _client_context(body, reported_url, query_stripped)
+        if body.breadcrumbs:
+            masks = [*BUILTIN_MASK_SELECTORS, *revision.mask_selectors]
+            if crumbs := clean_breadcrumbs(body.breadcrumbs, revision, masks):
+                context["breadcrumbs"] = crumbs
 
         async def create() -> tuple[int, dict]:
             # Serialize per program so the count-then-insert below is atomic.

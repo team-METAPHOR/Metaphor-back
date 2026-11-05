@@ -199,7 +199,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 | query | `project_key` | 예 | 1–64자 |
 | header | `Origin` | 예 | 브라우저가 자동으로 붙임 |
 | header | `Idempotency-Key` | 아니오(권장) | 1–128자 출력 가능한 문자. 6절 참고 |
-| form | `payload` | 예 | 아래 스키마의 JSON 문자열, UTF-8 기준 **32 KiB 이하** |
+| form | `payload` | 예 | 아래 스키마의 JSON 문자열, UTF-8 기준 **128 KiB 이하** |
 | form | `screenshot` | 아니오 | 이미지 파일 1개. PNG·JPEG·WebP 정지 이미지, **4 MiB 이하**, 각 변 4096px 이하, 전체 800만 화소 이하. 서버가 PNG로 정규화한 결과도 4 MiB 이하여야 함(넘으면 422 `INVALID_SCREENSHOT`) |
 
 ### `payload` JSON 스키마
@@ -229,7 +229,10 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
     "viewport": {"width": 1280, "height": 800}          // 선택, 각 1–10000 정수
   },
   "mask_boxes": [[0, 0, 200, 40]],                      // 선택, 최대 20개. screenshot과 함께만
-  "consent": {"environment": true, "screenshot": true}  // 선택, 두 값 모두 기본 false
+  "consent": {"environment": true, "screenshot": true, "activity": true}, // 선택, 모두 기본 false
+  "breadcrumbs": [                                      // 선택, 최대 50개. 보내려면 consent.activity = true
+    {"t": -12300, "type": "click", "tag": "button", "text": "장바구니 담기", "testid": "add-to-cart"}
+  ]                                                     // 자세한 형식은 아래 "최근 동작(breadcrumbs)"
 }
 ```
 
@@ -272,8 +275,68 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 |---|---|---|
 | `screenshot` 파일 | `consent.screenshot = true` | `422 CONSENT_REQUIRED` |
 | `environment` 객체 | `consent.environment = true` | `422 CONSENT_REQUIRED` |
+| `breadcrumbs` 배열(빈 배열 포함) | `consent.activity = true` | `422 CONSENT_REQUIRED` |
 
 SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `true`로 보내야 합니다.
+
+### 최근 동작(breadcrumbs)
+
+신고 직전에 사용자가 한 동작을 시간순으로 보내면, AI가 재현 단계를 세울 때 근거로 씁니다.
+선택 기능이며, 사용자가 "최근 동작 보내기"에 동의(`consent.activity = true`)한 경우에만 보냅니다.
+
+**공통 규칙**
+
+- 최대 **50개**. 51개 이상이면 `422 VALIDATION_FAILED`.
+- 모든 항목에 `t`(정수, 필수)와 `type`(필수)이 있습니다. `t`는 **신고 전송 시점 기준 ms**이며
+  `-600000 ≤ t ≤ 0`입니다(최근 10분). 예: 12.3초 전 → `-12300`.
+- 아래 표에 없는 필드를 보내면 요청 전체가 `422 VALIDATION_FAILED`입니다. 예를 들어 `input`에
+  `value`를 넣으면 거절됩니다. 표의 필드는 모두 선택이며 `null`이어도 됩니다.
+- 길이는 문자 수 기준이며, 넘으면 `422 VALIDATION_FAILED`.
+
+| `type` | 필드 | 설명 |
+|---|---|---|
+| `navigation` | `path` ≤ 512 | 같은 origin 안의 이동(최초 로드, pushState, popstate). `/`로 시작하는 경로만 |
+| `click` | `tag` ≤ 32, `role` ≤ 32, `text` ≤ 80, `testid` ≤ 80, `selector` ≤ 200 | `text`는 요소에 보이는 글자(버튼 라벨 등) |
+| `input` | `tag` ≤ 32, `input_type` ≤ 32, `label` ≤ 80, `testid` ≤ 80, `selector` ≤ 200, `checked` bool, `selected_text` ≤ 80, `length` 0–10000 | **값은 절대 보내지 않습니다.** `length`는 값의 글자 수, `checked`는 체크박스·라디오, `selected_text`는 `select`에서 고른 옵션의 표시 글자 |
+| `submit` | `label` ≤ 80, `testid` ≤ 80, `selector` ≤ 200 | 폼 제출 |
+| `key` | `key` | `Enter`, `Escape`, `Tab`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Backspace` 중 하나. 다른 키(글자·숫자 키 포함)는 보내면 거절 |
+| `request` | `method`, `path` ≤ 512, `status` 100–599, `duration_ms` 0–600000 | fetch/XHR. `method`는 GET·HEAD·POST·PUT·PATCH·DELETE·OPTIONS. 네트워크 오류·중단으로 응답이 없으면 `status`를 빼고 보냄. 경로만 보내고 헤더·본문은 넣을 필드가 없음 |
+| `error` | `message` ≤ 200 | JS 오류 메시지 |
+
+**SDK가 지킬 것**
+
+- 입력값, 비밀번호, 글자 키 입력, 쿠키, 토큰, 요청·응답 헤더와 본문, 마우스 좌표는 보내지 않습니다.
+- `path`에는 쿼리와 `#…`를 빼고 경로만 넣습니다.
+- `config.mask_selectors`에 걸리는 요소와 입력창(`input`, `textarea`, `select`,
+  `[contenteditable]`)을 클릭했을 때는 `text`를 보내지 않습니다.
+- 동작은 메모리에만 잠깐 보관하고, 신고할 때 한 번만 보냅니다.
+
+**서버가 한 번 더 하는 정리** (SDK가 실수해도 저장되지 않게)
+
+- 모든 경로에서 쿼리와 fragment를 지웁니다.
+- 승인된 테스트 범위 밖이거나 제외 경로 아래인 경로는 `"(범위 밖)"`으로 바꿉니다. 제외 경로 아래의
+  `request` 항목은 통째로 버립니다. `/`로 시작하지 않는 값(전체 URL 등)도 `"(범위 밖)"`입니다.
+- `click`의 `tag`가 `input`·`textarea`·`select`·`option`이거나 `role`이 입력 계열(`textbox`,
+  `searchbox`, `combobox`, `listbox`, `option`, `spinbutton`)이면 `text`를 지웁니다.
+- `selector`·`testid`(input은 `label`도)가 마스킹 셀렉터(기본 목록 + 프로그램 `mask_selectors`)와
+  맞거나 `password`·`secret`·`token`·`card`·`ssn`·`otp`·`contenteditable`·`카드`·`비밀`·`주민`·`계좌`
+  같은 말을 담고 있으면 `text`·`selected_text`를 지웁니다.
+- `selected_text`는 `select`와 `radio`·`checkbox`일 때만 남깁니다. `password`·`hidden` 입력은
+  `selected_text`와 `length`를 지웁니다.
+- 모든 문자열에 개인정보 가림 처리(토큰, 이메일, 전화번호, 카드번호 등)를 합니다.
+- 시간순으로 정렬하고, 바로 앞과 똑같은 동작은 하나로 합쳐 `count`(반복 횟수)를 붙입니다.
+
+정리된 동작은 신고의 `client_context.breadcrumbs`에 저장되고 대시보드 신고 상세에서 읽기 전용으로
+보입니다. AI에게는 신고 설명 뒤에 아래처럼 붙여 넘깁니다(이 구역은 최대 2000자, 넘으면 오래된 것부터
+생략. 사용자가 쓴 설명은 자르지 않음). 중복 병합 판정에는 쓰지 않습니다.
+
+```text
+[신고 직전 사용자 동작] (시간순, 마지막 줄이 신고 직전. 시간은 신고 시점 기준)
+-30.0s 이동 /cart
+-25.0s 클릭 button '장바구니 담기' [data-testid=add-to-cart]
+-15.0s 입력 input[type=text] '쿠폰 코드' [data-testid=coupon] (8자)
+-10.0s 요청 POST /api/cart/coupons → 409 (120ms)
+```
 
 ### `mask_boxes` 좌표
 
@@ -310,10 +373,10 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 먼저 실패한 검사의 오류가 반환됩니다. 디버깅할 때 참고하세요.
 
 1. 요청 크기: `Content-Length` 없음 411, 5 MiB 초과 413
-2. 폼 형식: `project_key`·`payload` 누락, `payload` 32768자 초과 → 422 `VALIDATION_FAILED`(이 응답에는 CORS 허용 헤더가 없음)
+2. 폼 형식: `project_key`·`payload` 누락, `payload` 131072자 초과 → 422 `VALIDATION_FAILED`(이 응답에는 CORS 허용 헤더가 없음)
 3. 키·Origin: 404 `WIDGET_NOT_FOUND`, 403 `ORIGIN_NOT_ALLOWED`
 4. 업로드한 스크린샷 파일이 4 MiB 초과: 413 `UPLOAD_TOO_LARGE` (파일은 4 MiB 이하지만 PNG로 정규화한 결과가 4 MiB를 넘으면 6단계에서 422 `INVALID_SCREENSHOT`)
-5. `payload` 형식(JSON, 32 KiB, 스키마): 422 `VALIDATION_FAILED`
+5. `payload` 형식(JSON, 128 KiB, 스키마): 422 `VALIDATION_FAILED`
 6. 동의 → 오류 정보 → 마스킹 박스 → 이미지 형식: 422 `CONSENT_REQUIRED` / `ERROR_DETAILS_INVALID` / `MASK_BOX_INVALID` / `INVALID_SCREENSHOT`
 7. 서버 설정: 503 `WIDGET_UNAVAILABLE`
 8. 위젯·신고 꺼짐 403 `WIDGET_REPORTING_DISABLED`, 자동 감지 꺼짐 403 `AUTO_DETECT_DISABLED`
@@ -339,7 +402,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 | 411 | `LENGTH_REQUIRED` | `Content-Length` 헤더 없음(스트리밍 업로드 등) | 본문 길이를 알 수 있게 `FormData`/`Blob`으로 전송 |
 | 413 | `REQUEST_TOO_LARGE` | 전체 요청이 5 MiB 초과 | 스크린샷을 줄이거나 빼고 재시도 |
 | 413 | `UPLOAD_TOO_LARGE` | 업로드한 스크린샷 파일이 4 MiB 초과 | 이미지 압축·축소 후 재시도 |
-| 422 | `VALIDATION_FAILED` | `payload` 누락, JSON 아님, 32 KiB 초과, 스키마 위반(모르는 필드, 길이·형식 초과), `project_key` 누락 | 버그로 보고 수정. 같은 요청을 재시도하지 않음 |
+| 422 | `VALIDATION_FAILED` | `payload` 누락, JSON 아님, 128 KiB 초과, 스키마 위반(모르는 필드, 길이·형식 초과), `project_key` 누락 | 버그로 보고 수정. 같은 요청을 재시도하지 않음 |
 | 422 | `CONSENT_REQUIRED` | 스크린샷이나 환경 정보를 보냈는데 해당 동의가 `true`가 아님 | 동의 UI 확인 후 다시 제출 |
 | 422 | `ERROR_DETAILS_INVALID` | `error_type`에 맞지 않는 `error`/`error.http`, 또는 `status`가 500–599가 아님 | 자동 감지 코드 수정 |
 | 422 | `MASK_BOX_INVALID` | 박스 값이 4개가 아님, 이미지 범위 밖(`x1 < x2`, `y1 < y2` 아님 포함), 스크린샷 없이 박스만 보냄. 21개 이상이거나 정수가 아니면 `VALIDATION_FAILED` | 좌표 변환(naturalWidth 기준) 확인 |
@@ -389,6 +452,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 - 사용자가 입력창에 쓴 값(폼 값, 비밀번호 칸, 검색어 이외의 개인 정보)
 - `localStorage`, `sessionStorage`, IndexedDB 내용
 - 민감한 쿼리가 담긴 전체 URL. `error.http.path`에는 경로만, `stack_top`에는 스크립트 위치만 넣으세요.
+- `breadcrumbs`에 입력값, 글자 키 입력, 마우스 좌표. 입력은 `length`·`checked`만 보냅니다.
 
 스크린샷을 찍을 때는 `config.mask_selectors`와 입력창 값을 먼저 가리고([스크린샷 마스킹](#스크린샷-마스킹)),
 그 밖의 개인 정보 영역은 사용자가 `mask_boxes`로 더 가릴 수 있게 해 주세요.

@@ -346,3 +346,12 @@ async def test_viewer_reads_and_other_org_404(client, db_session, world):  # noq
     for who in ("stranger", "other_admin"):
         assert (await client.get(handoff_url(world), headers=world[who])).status_code == 404
     assert (await client.get(handoff_url(world))).status_code == 401
+
+
+def test_public_url_drops_matrix_params_query_and_userinfo():
+    from app.services.diagnosis import public_url
+
+    assert (
+        public_url("https://u:p@shop.test:8443/a;jsessionid=SECRET/b;x=1?q=1#f")
+        == "https://shop.test:8443/a/b"
+    )

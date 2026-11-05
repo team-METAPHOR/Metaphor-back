@@ -73,7 +73,7 @@ def _ids(value) -> list[str]:
 
 
 def public_url(value) -> str | None:
-    """scheme://host[:port]/path only: no user info, query or fragment."""
+    """scheme://host[:port]/path only: no user info, query, fragment or `;params`."""
     if not isinstance(value, str):
         return None
     try:
@@ -87,7 +87,9 @@ def public_url(value) -> str | None:
     netloc = f"[{host}]" if ":" in host else host
     if port is not None:
         netloc += f":{port}"
-    return redact(urlunsplit((parts.scheme, netloc, parts.path, "", "")))
+    # Matrix params (`/a;jsessionid=…/b`) can carry session ids or tokens like a query string.
+    path = "/".join(segment.split(";", 1)[0] for segment in parts.path.split("/"))
+    return redact(urlunsplit((parts.scheme, netloc, path, "", "")))
 
 
 def _next_step(value) -> NextStep | None:

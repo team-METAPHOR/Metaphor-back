@@ -63,4 +63,47 @@ Core_engine `docs/browser-request-policy.md`.
 ## 워커
 
 워커는 작업 스냅샷의 `state_changes`로 `StateChangePolicy`를 만들어 `RunPolicy`에 넣습니다.
-스냅샷에 값이 없으면(이 기능 이전 작업 포함) 쓰기는 계속 `METHOD_NOT_ALLOWED`로 막힙니다.
+스냅샷에 값이 없으면(이 기능 이전 작업 포함) 쓰기는 계속 `METHOD_NOT_ALLOWED`로 막히고, 초기화 콜백도 기존처럼 일반 함수로 넘깁니다.
+
+승인된 작업은 초기화 어댑터를 엔진 `StateReset(<reset_adapter_id>, callback)`으로 감싸 `run`/`resume`/`retest`에 넘깁니다(콜백 `(attempt)`).
+조건 비교 작업은 `ConditionsService`에 `(condition_id, attempt)` 콜백을 같은 방식으로 넘기고, 엔진이 조건별로 묶습니다.
+엔진은 탐색(0)과 독립 시도(1, 2), 재검증마다 **초기화 → 새 브라우저 컨텍스트 → 새 로그인** 순서로 실행하고, 초기화가 `True`를 돌려주지 않으면 `RESET_FAILED`로 멈추며 쓰기를 보내지 않습니다.
+
+엔진 실행 전 워커 실패 코드(`backend_error_code`):
+
+| 코드 | 원인 |
+|---|---|
+| `STATE_RESET_REQUIRED` | 스냅샷의 프로그램/조건 `reset_adapter`가 승인 어댑터와 다르거나 상태 초기화 어댑터가 아님 |
+| `STATE_CHANGES_SESSION_CONFLICT` | 운영자 세션이 연결된 스냅샷(DB에서 직접 연결한 경우 포함) |
+| `RESET_ACCOUNT_MISSING` | 계정별 초기화인데 저장된 테스트 계정(로그인 경로·성공 신호 포함)이 없음 |
+| `RESET_TOKEN_MISSING` | 워커에 어댑터 토큰 환경변수가 없음 |
+| `RESET_TARGET_NOT_APPROVED` | `base_url` 원점이 어댑터의 승인 HTTPS 원점 목록에 없음(토큰을 보내지 않음) |
+
+같은 초기화 대상 계정을 쓰는 작업은 프로그램·조직·테스트 문맥이 달라도 한 번에 하나만 실행합니다(어댑터·원점·계정 해시 기준 advisory lock). 서로 다른 계정이면 병렬로 실행됩니다.
+
+## `buglab-v1` 어댑터 (BugLab Shop dev)
+
+`POST <base_url 원점>/api/test/reset`에 `X-Test-Token`과 `{"email": <테스트 계정 아이디(소문자)>}`를 보냅니다.
+응답이 200이고 같은 이메일, 빈 장바구니(`cart.items == []`), 적용 쿠폰 없음(`cart.appliedCoupons == []`)일 때만 성공입니다. 그 외 상태 코드·형식·네트워크 오류는 모두 실패(`False`)입니다.
+BugLab은 이 호출로 해당 계정의 장바구니·쿠폰·찜·세션·로그인 실패 기록을 지웁니다.
+
+- 워커 전용 환경변수: `QA_RESET_BUGLAB_TOKEN`(토큰), `QA_RESET_BUGLAB_ORIGINS`(토큰을 보낼 수 있는 정확한 HTTPS 원점, 쉼표 구분). API 프로세스에는 두지 않습니다.
+- HTTPS 인증서 검증, 리다이렉트·프록시 미사용, 10초 제한. 토큰·계정·URL은 로그·결과·이벤트에 남기지 않고, 브라우저 계획·모델 입력에도 넣지 않습니다. 브라우저 쪽 `/api/test`는 범위에서 제외하고 쓰기 승인도 거절합니다.
+- 고객 관리자가 어댑터 이름을 고를 수 있으므로 토큰 대상 원점은 운영자 환경변수로만 정합니다.
+
+### B02 데모 설정 예
+
+```json
+{
+  "excluded_path_prefixes": ["/api/test", "/api/auth/signup"],
+  "reset_adapter": "buglab-v1",
+  "state_changes": {
+    "environment": "test",
+    "reset_adapter_id": "buglab-v1",
+    "allowed_requests": [["POST", "/api/cart/items"], ["PATCH", "/api/cart/items"]]
+  }
+}
+```
+
+쿠폰·찜 데모를 켤 때만 `["POST", "/api/cart/coupons"]`, `["POST", "/api/favorites"]`, `["DELETE", "/api/favorites"]`를 추가합니다.
+테스트 계정은 `unauthenticated_paths: ["/api/auth/me"]`로 저장합니다([테스트 계정 API](./test-account.md)).

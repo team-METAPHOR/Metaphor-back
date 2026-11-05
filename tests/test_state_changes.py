@@ -5,27 +5,17 @@ from core_engine import StateChangePolicy
 from sqlalchemy import select, update
 
 from app.models import Program, ProgramScopeRevision, ValidationJob
-from app.services import programs as programs_service
 from app.services.intake import ReportSubmission
 from app.services.reports import create_report
 from app.worker import runner
 from tests.factories import login_as, make_org, make_program
 
-ADAPTER = "stateful-test"
+ADAPTER = "buglab-v1"
 B02 = {
     "environment": "test",
     "reset_adapter_id": ADAPTER,
     "allowed_requests": [["POST", "/api/cart/items"], ["PATCH", "/api/cart/items"]],
 }
-
-
-@pytest.fixture(autouse=True)
-def stateful_adapter(monkeypatch):
-    # The real adapter registers in a later change; any stateful id the worker knows works.
-    monkeypatch.setattr(
-        programs_service, "ALLOWED_RESET_ADAPTERS", ("stateless", ADAPTER), raising=True
-    )
-    monkeypatch.setattr(programs_service, "STATEFUL_RESET_ADAPTERS", (ADAPTER,), raising=True)
 
 
 @pytest.fixture

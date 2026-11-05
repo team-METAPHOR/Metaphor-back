@@ -34,7 +34,7 @@
 - `label`: 1~200자 공개 문구. 이메일·전화번호 같은 개인정보가 들어 있으면 422입니다.
 - `browser_name`: `chromium` / `firefox` / `webkit`.
 - 화면 크기: 320x320 ~ 1920x1080. `response_delay_ms`: 0~2000(응답 전달 지연).
-- `reset_adapter`: 워커에 등록된 이름만 받습니다(현재 `stateless`).
+- `reset_adapter`: 워커에 등록된 이름만 받습니다(`stateless`, `buglab-v1`). 프로그램에 쓰기 승인(`state_changes`)이 있으면 모든 조건이 같은 상태 초기화 어댑터여야 하고 운영자 세션을 쓸 수 없습니다. 아니면 작업이 엔진 실행 전에 `STATE_RESET_REQUIRED`/`STATE_CHANGES_SESSION_CONFLICT`로 실패합니다([승인된 테스트 쓰기](./state-changes.md)).
 - 프로그램 하나에 조건은 최대 16개입니다. 넘으면 409 `CONDITION_LIMIT_EXCEEDED`, 같은 ID가
   이미 있으면 409 `CONDITION_EXISTS`, 엔진 규칙에 어긋나면 422 `INVALID_CONDITION`입니다.
 - 모르는 필드는 거절합니다(예: `session_secret_ref`, 환경변수, 파일 경로).

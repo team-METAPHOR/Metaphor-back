@@ -17,10 +17,11 @@ from app.services.audit import record_audit
 from app.services.intake import run_policy
 
 # keep in sync with app.worker.resets.RESETS
-ALLOWED_RESET_ADAPTERS = ("stateless",)
+ALLOWED_RESET_ADAPTERS = ("stateless", "buglab-v1")
 # Registered adapters that really restore server-side test data: the only ones that may back
 # approved writes (`state_changes`). `stateless` never qualifies (the engine refuses it too).
-STATEFUL_RESET_ADAPTERS: tuple[str, ...] = ()
+# keep in sync with app.worker.resets.STATEFUL
+STATEFUL_RESET_ADAPTERS: tuple[str, ...] = ("buglab-v1",)
 # Never writable from the worker browser, whatever the approval says: the test-control API
 # (the reset adapter calls it server-side) and account creation.
 RESERVED_WRITE_PREFIXES = ("/api/test",)

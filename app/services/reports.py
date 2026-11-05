@@ -15,6 +15,7 @@ from app.core.text import sanitize_text
 from app.integrations import storage
 from app.models import Artifact, ProgramScopeRevision, Report, User, ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
+from app.repositories import orgs as orgs_repo
 from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import Assignee, ReportCreated, ReportDetail, ReportItem, ReportList
@@ -63,6 +64,7 @@ async def create_report(
         id=new_id(),
         program_id=program.id,
         org_id=program.owner_org_id,
+        number=await orgs_repo.next_report_number(session, program.owner_org_id),
         source=sub.source,
         author_id=sub.author_id,
         public_receipt_id="rcpt_" + secrets.token_urlsafe(16) if sub.source == "widget" else None,
@@ -239,6 +241,7 @@ def _item(
     return {
         "id": report.id,
         "program_id": report.program_id,
+        "number": report.number,
         "title": report.title,
         "source": report.source,
         "error_type": report.error_type,
@@ -287,6 +290,19 @@ async def list_reports(
 async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDetail:
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
+        return await _detail(db, report)
+
+
+async def get_report_by_number(
+    db: AsyncSession, user_id: str, org_id: str, number: int
+) -> ReportDetail:
+    """Same as `get_report`, addressed by the org's human number (BUG-<number>)."""
+    async with db.begin():
+        if await org_role(db, user_id, org_id) is None:
+            raise ApiError(404, "NOT_FOUND", "제보를 찾을 수 없습니다.")
+        report = await reports_repo.get_by_number(db, org_id, number)
+        if report is None:
+            raise ApiError(404, "NOT_FOUND", "제보를 찾을 수 없습니다.")
         return await _detail(db, report)
 
 

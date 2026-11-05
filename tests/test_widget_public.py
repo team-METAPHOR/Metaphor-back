@@ -420,6 +420,7 @@ async def test_project_rate_limit_429(client, db_session, world):
     rows = [
         Report(
             id=f"{i:032x}",
+            number=seed.number + 1 + i,
             program_id=seed.program_id,
             org_id=seed.org_id,
             source="widget",

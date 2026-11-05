@@ -10,6 +10,10 @@ async def get(db: AsyncSession, report_id: str) -> Report | None:
     return await db.get(Report, report_id)
 
 
+async def get_by_number(db: AsyncSession, org_id: str, number: int) -> Report | None:
+    return await db.scalar(select(Report).where(Report.org_id == org_id, Report.number == number))
+
+
 def count_by_author(author_id: str, since: datetime) -> Select:
     return (
         select(func.count())

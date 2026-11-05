@@ -1,3 +1,4 @@
+import itertools
 import os
 import subprocess
 import sys
@@ -43,9 +44,13 @@ async def seed(session):
     return org, user, program
 
 
+_numbers = itertools.count(1)
+
+
 def report(org, program, **kwargs):
     values = {
         "id": new_id(),
+        "number": next(_numbers),
         "program_id": program.id,
         "org_id": org.id,
         "target_url": "https://staging.example.com/",

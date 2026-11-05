@@ -76,6 +76,10 @@ async def make_report(session, org, program, author=None, **kwargs):
         "description": "bug",
     }
     values.update(kwargs)
+    if "number" not in values:
+        from app.repositories.orgs import next_report_number
+
+        values["number"] = await next_report_number(session, org.id)
     report = Report(**values)
     session.add(report)
     await session.flush()

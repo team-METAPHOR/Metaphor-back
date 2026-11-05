@@ -1,7 +1,7 @@
 # 테스트 조건 비교 API (조건 등록·조건별 실행·조건별 결과)
 
 계정 역할·브라우저·화면 크기·응답 지연을 바꿔 가며 같은 제보를 재현해 보는 기능입니다.
-엔진 `ConditionsService`(core_engine 0.3.0)를 씁니다.
+엔진 `ConditionsService`(core_engine 0.4.1, `0f833d2` 고정)를 씁니다.
 
 ## 조건 등록 (`/programs/{program_id}/test-conditions`)
 
@@ -72,13 +72,16 @@ HTTP 원점에서 세션이 연결된 조건을 수정하면 422 `CREDENTIALS_RE
 한 조건이라도 재현되면 `reproduced`, 실행한 모든 조건에서 재현되지 않으면 `not_reproduced`,
 그 밖에는 `inconclusive`입니다.
 
-아직 지원하지 않는 것(후속 작업):
+### 조건 비교 작업 재검증
 
-- 조건 비교 작업을 기준으로 재검증(`mode: "retest"`)하면 기준 작업에서 재현된 조건을 모두 다시 실행합니다. 조건마다 저장된 계획과 조건 설정을 그대로 써서 한 작업 안에서 차례로 돌립니다. 결과 행은 `GET /validation-jobs/{id}/conditions`로 확인합니다.
-  - 판정: 재현된 조건이 하나라도 있으면 `reproduced`, 필요한 조건이 모두 `not_reproduced`일 때만 `not_reproduced`, 나머지(불일치·미실행·취소·실패)는 `inconclusive`입니다.
-  - `fix_verified`는 필요한 조건이 모두 통과해야 참이 됩니다. 하나라도 통과하지 못하면 `closed` 변경은 409 `FIX_NOT_VERIFIED`입니다.
-  - 재현된 조건이 없는 작업, 조건 재검증 작업 자체는 기준으로 쓸 수 없습니다 → 409 `BASELINE_NOT_COMPARABLE`. 원래의 조건 비교 작업을 기준으로 지정하세요.
-  재현된 조건이 모두 통과해야 수정 확인으로 치는 규칙과 함께 들어갑니다.
+조건 비교 작업을 기준으로 재검증(`mode: "retest"`)하면 기준 작업에서 재현된 조건을 모두 다시 실행합니다. 조건마다 저장된 계획과 조건 설정을 그대로 써서 한 작업 안에서 차례로 돌립니다. 결과 행은 `GET /validation-jobs/{id}/conditions`로 확인합니다.
+
+- 판정: 재현된 조건이 하나라도 있으면 `reproduced`, 필요한 조건이 모두 `not_reproduced`일 때만 `not_reproduced`, 나머지(불일치·미실행·취소·실패)는 `inconclusive`입니다.
+- `fix_verified`는 필요한 조건이 모두 통과해야 참이 됩니다. 하나라도 통과하지 못하면 `closed` 변경은 409 `FIX_NOT_VERIFIED`입니다.
+- 재현된 조건이 없는 작업, 조건 재검증 작업 자체는 기준으로 쓸 수 없습니다 → 409 `BASELINE_NOT_COMPARABLE`. 원래의 조건 비교 작업을 기준으로 지정하세요.
+
+아직 지원하지 않는 것:
+
 - 조건 비교 작업의 추가 질문 답변 → 409 `CONDITION_RESUME_UNSUPPORTED`. 새 검증을 요청하세요.
 - 결론 없음(inconclusive) 뒤 자동 새 검증(auto fresh)은 조건 비교 작업에서는 돌지 않습니다.
 

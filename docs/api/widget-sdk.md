@@ -200,7 +200,7 @@ SDK가 페이지 화면을 직접 캡처할 때(특히 운영 원점에서 `live
 | header | `Origin` | 예 | 브라우저가 자동으로 붙임 |
 | header | `Idempotency-Key` | 아니오(권장) | 1–128자 출력 가능한 문자. 6절 참고 |
 | form | `payload` | 예 | 아래 스키마의 JSON 문자열, UTF-8 기준 **32 KiB 이하** |
-| form | `screenshot` | 아니오 | 이미지 파일 1개. PNG·JPEG·WebP 정지 이미지, **4 MiB 이하**, 각 변 4096px 이하, 전체 800만 화소 이하 |
+| form | `screenshot` | 아니오 | 이미지 파일 1개. PNG·JPEG·WebP 정지 이미지, **4 MiB 이하**, 각 변 4096px 이하, 전체 800만 화소 이하. 서버가 PNG로 정규화한 결과도 4 MiB 이하여야 함(넘으면 422 `INVALID_SCREENSHOT`) |
 
 ### `payload` JSON 스키마
 
@@ -312,16 +312,18 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 1. 요청 크기: `Content-Length` 없음 411, 5 MiB 초과 413
 2. 폼 형식: `project_key`·`payload` 누락, `payload` 32768자 초과 → 422 `VALIDATION_FAILED`(이 응답에는 CORS 허용 헤더가 없음)
 3. 키·Origin: 404 `WIDGET_NOT_FOUND`, 403 `ORIGIN_NOT_ALLOWED`
-4. 스크린샷 4 MiB 초과: 413 `UPLOAD_TOO_LARGE`
+4. 업로드한 스크린샷 파일이 4 MiB 초과: 413 `UPLOAD_TOO_LARGE` (파일은 4 MiB 이하지만 PNG로 정규화한 결과가 4 MiB를 넘으면 6단계에서 422 `INVALID_SCREENSHOT`)
 5. `payload` 형식(JSON, 32 KiB, 스키마): 422 `VALIDATION_FAILED`
 6. 동의 → 오류 정보 → 마스킹 박스 → 이미지 형식: 422 `CONSENT_REQUIRED` / `ERROR_DETAILS_INVALID` / `MASK_BOX_INVALID` / `INVALID_SCREENSHOT`
 7. 서버 설정: 503 `WIDGET_UNAVAILABLE`
 8. 위젯·신고 꺼짐 403 `WIDGET_REPORTING_DISABLED`, 자동 감지 꺼짐 403 `AUTO_DETECT_DISABLED`
 9. 원점 일치 422 `PAGE_URL_ORIGIN_MISMATCH` → 운영 스크린샷 403 `LIVE_SCREENSHOT_DISABLED` → 범위 422 `SCOPE_VIOLATION`
 10. 같은 `Idempotency-Key` 재전송이면 처음 응답 반환(다른 내용이면 409, 키 형식 오류는 400)
-11. 시간당 한도 429 → 중복 병합 200 → 프로그램 상태·AI 허용 422 → 스크린샷·설명 둘 다 없음 422 → 도메인 소유 미확인 422 → 201
+11. 시간당 한도 429 → 일일 저장 상한 429 `WIDGET_DAILY_LIMITED` → 중복 병합 200 → 프로그램 상태·AI 허용 422 → 스크린샷·설명 둘 다 없음 422 → 도메인 소유 미확인 422 → 201
 
-일일 한도(프로그램의 검증 실행 한도, 위젯 일일 상한)를 넘어도 오류가 아닙니다. 제보는 저장되고 같은 201 접수 응답(`status: "received"`)을 받습니다. 고객사는 검증 대기 상태로 보고 나중에 직접 실행합니다.
+위젯 일일 상한(프로그램 `daily_job_limit`의 절반, 최소 1)을 넘어도 바로 오류가 되지는 않습니다. 제보는 저장되고 같은 201 접수 응답(`status: "received"`)을 받습니다. 고객사는 검증 대기 상태로 보고 나중에 직접 실행합니다.
+
+다만 저장 공간을 지키기 위해 오늘(UTC 기준) 만들어진 위젯 제보가 위젯 일일 상한의 **4배**에 이르면 그 뒤 제보는 저장하지 않고 `429 WIDGET_DAILY_LIMITED`로 거절합니다. 이 상한은 UTC 자정에 초기화됩니다.
 
 ## 5. 오류 코드
 
@@ -336,12 +338,12 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 같은 `Idempotency-Key`로 다른 내용을 보냄 | 사용자가 내용을 바꿨다면 새 키 발급 |
 | 411 | `LENGTH_REQUIRED` | `Content-Length` 헤더 없음(스트리밍 업로드 등) | 본문 길이를 알 수 있게 `FormData`/`Blob`으로 전송 |
 | 413 | `REQUEST_TOO_LARGE` | 전체 요청이 5 MiB 초과 | 스크린샷을 줄이거나 빼고 재시도 |
-| 413 | `UPLOAD_TOO_LARGE` | 스크린샷이 4 MiB 초과 | 이미지 압축·축소 후 재시도 |
+| 413 | `UPLOAD_TOO_LARGE` | 업로드한 스크린샷 파일이 4 MiB 초과 | 이미지 압축·축소 후 재시도 |
 | 422 | `VALIDATION_FAILED` | `payload` 누락, JSON 아님, 32 KiB 초과, 스키마 위반(모르는 필드, 길이·형식 초과), `project_key` 누락 | 버그로 보고 수정. 같은 요청을 재시도하지 않음 |
 | 422 | `CONSENT_REQUIRED` | 스크린샷이나 환경 정보를 보냈는데 해당 동의가 `true`가 아님 | 동의 UI 확인 후 다시 제출 |
 | 422 | `ERROR_DETAILS_INVALID` | `error_type`에 맞지 않는 `error`/`error.http`, 또는 `status`가 500–599가 아님 | 자동 감지 코드 수정 |
 | 422 | `MASK_BOX_INVALID` | 박스 값이 4개가 아님, 이미지 범위 밖(`x1 < x2`, `y1 < y2` 아님 포함), 스크린샷 없이 박스만 보냄. 21개 이상이거나 정수가 아니면 `VALIDATION_FAILED` | 좌표 변환(naturalWidth 기준) 확인 |
-| 422 | `INVALID_SCREENSHOT` | PNG·JPEG·WebP 정지 이미지가 아님, 또는 크기 제한(각 변 4096px, 800만 화소) 초과 | 지원 형식으로 변환하거나 스크린샷 없이 제출 |
+| 422 | `INVALID_SCREENSHOT` | PNG·JPEG·WebP 정지 이미지가 아님, 또는 크기 제한(각 변 4096px, 800만 화소) 초과, 또는 PNG로 정규화한 결과가 4 MiB 초과 | 지원 형식으로 변환하거나 스크린샷 없이 제출 |
 | 422 | `SCREENSHOT_OR_DESCRIPTION_REQUIRED` | 스크린샷도 설명도 없음 | 사용자에게 설명 입력 요청 |
 | 422 | `PAGE_URL_ORIGIN_MISMATCH` | `page_url`의 원점이 요청 `Origin`과 다름 | `location.href`를 그대로 보냈는지 확인 |
 | 422 | `SCOPE_VIOLATION` | 재현 주소가 승인된 테스트 범위 밖. `error.detail.reason`에 이유(`PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `STATE_CHANGING_PATH`, `INVALID_URL`, `AMBIGUOUS_PATH` 등) | 이 페이지에서는 신고 불가 안내. 재시도하지 않음 |
@@ -350,6 +352,7 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 | 422 | `ORIGIN_NOT_VERIFIED` | 고객사가 테스트 대상 도메인의 소유 확인을 아직 마치지 않음 | 신고 버튼 숨김(`config.reporting_enabled`가 `false`) |
 | 429 | `WIDGET_IP_RATE_LIMITED` | 같은 IP에서 이 프로젝트로 1시간에 10건 초과 | 7절대로 대기. 사용자에게 "잠시 후 다시" 안내 |
 | 429 | `WIDGET_PROJECT_RATE_LIMITED` | 이 프로젝트 전체가 1시간에 100건 초과 | 7절대로 대기 |
+| 429 | `WIDGET_DAILY_LIMITED` | 오늘(UTC) 저장된 위젯 제보가 위젯 일일 상한의 4배에 도달 | 오늘은 더 보내지 않음. 사용자에게 "오늘은 접수가 마감됐다"고 안내 |
 | 503 | `WIDGET_UNAVAILABLE` | 서버 설정 문제로 위젯 신고를 받을 수 없음 | 잠시 뒤 재시도(7절 백오프) |
 | 500 | `INTERNAL_ERROR` | 서버 내부 오류 | 같은 `Idempotency-Key`로 백오프 재시도 |
 
@@ -369,9 +372,10 @@ SDK는 사용자가 화면에서 직접 체크한 경우에만 동의 값을 `tr
 ## 7. 재시도와 429
 
 - 4xx는 대부분 요청을 고쳐야 하는 오류입니다. **같은 요청을 자동으로 반복하지 마세요.**
-- 429·503·500·네트워크 오류만 재시도 대상입니다. **지수 백오프 + 지터**로 최대 3번 정도만 시도하고,
+- 429(`WIDGET_DAILY_LIMITED` 제외)·503·500·네트워크 오류만 재시도 대상입니다. **지수 백오프 + 지터**로 최대 3번 정도만 시도하고,
   루프로 계속 보내지 마세요(예: 30초, 2분, 10분).
 - 429를 받으면 그 페이지 세션에서는 자동 감지 신고를 멈추고, 사용자에게 잠시 후 다시 시도하라고 알리세요.
+- `429 WIDGET_DAILY_LIMITED`는 UTC 자정까지 풀리지 않으므로 재시도하지 마세요.
 - 서버는 `Retry-After` 헤더를 보내지 않습니다.
 
 ## 8. 절대 보내지 말 것

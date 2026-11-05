@@ -1,0 +1,22 @@
+[Unit]
+Description=Metaphor validation worker
+After=network.target postgresql.service
+
+[Service]
+Type=exec
+User=ubuntu
+WorkingDirectory=/home/ubuntu/metaphor-back
+Environment="PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=/home/ubuntu/metaphor-back/.env
+EnvironmentFile=-/home/ubuntu/metaphor-back/.env.worker
+ExecStart=/home/ubuntu/.local/bin/uv run --group worker python -m app.worker.main
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+# Only signal the supervisor; let its current child finish and release the lease.
+KillMode=mixed
+TimeoutStopSec=240
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

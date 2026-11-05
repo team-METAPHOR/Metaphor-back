@@ -19,7 +19,10 @@ from app.models.columns import ID_LENGTH, created_at, fk, id_pk, one_of, updated
 REPORT_SOURCES = ("platform", "widget")
 ERROR_TYPES = ("manual", "js_error", "unhandled_rejection", "http_5xx")
 ORIGIN_KINDS = ("approved", "mapped")
-WORKFLOW_STATUSES = ("received", "in_review", "accepted", "closed")
+# received: 신규, fixing: 버그 수정 중, dismissed: 버그 아님/중복 (manual terminal),
+# closed: 마감 — set only by the worker when a retest passes.
+WORKFLOW_STATUSES = ("received", "fixing", "dismissed", "closed")
+MANUAL_WORKFLOW_STATUSES = ("received", "fixing", "dismissed")
 
 
 class Report(Base):
@@ -53,6 +56,7 @@ class Report(Base):
     input_artifact_id: Mapped[str | None] = mapped_column(String(ID_LENGTH))
     latest_job_id: Mapped[str | None] = mapped_column(String(ID_LENGTH))
     workflow_status: Mapped[str] = mapped_column(String(20), server_default="received")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_type: Mapped[str] = mapped_column(String(30), server_default="manual")
     origin_kind: Mapped[str] = mapped_column(String(20), server_default="approved")
     # Whitelisted SDK environment/error metadata, redacted.

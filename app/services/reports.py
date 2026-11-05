@@ -14,6 +14,7 @@ from app.core.pagination import decode_cursor, encode_cursor
 from app.core.text import sanitize_text
 from app.integrations import storage
 from app.models import Artifact, ProgramScopeRevision, Report, ValidationJob
+from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import ReportCreated, ReportDetail, ReportItem, ReportList
@@ -210,6 +211,17 @@ def _brief(job: ValidationJob | None) -> JobBrief | None:
     return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=job.verdict)
 
 
+def report_progress(workflow_status: str, job: JobBrief | ValidationJob | None) -> str:
+    """Dashboard stage; the mapping table is documented on `ReportItem`."""
+    if workflow_status in ("closed", "dismissed", "fixing"):
+        return workflow_status
+    if job is None:
+        return "new"
+    if job.status in ACTIVE_JOB_STATUSES:
+        return "reproducing"
+    return "reproduced" if job.verdict == "reproduced" else "triaged"
+
+
 def _item(report: Report, job: ValidationJob | None) -> dict:
     return {
         "id": report.id,
@@ -220,6 +232,8 @@ def _item(report: Report, job: ValidationJob | None) -> dict:
         "origin_kind": report.origin_kind,
         "duplicate_count": report.duplicate_count,
         "workflow_status": report.workflow_status,
+        "progress": report_progress(report.workflow_status, job),
+        "closed_at": report.closed_at,
         "latest_job": _brief(job),
         "created_at": report.created_at,
     }
@@ -251,7 +265,11 @@ async def list_reports(
 async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDetail:
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
-        job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
+        return await _detail(db, report)
+
+
+async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
+    job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
     return ReportDetail(
         **_item(report, job),
         target_url=report.target_url,
@@ -263,3 +281,35 @@ async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDe
         client_context=report.client_context,
         scrubbed=report.scrubbed_at is not None,
     )
+
+
+WORKFLOW_ROLES = ("reviewer", "admin")
+
+
+async def set_workflow_status(
+    db: AsyncSession, user_id: str, report_id: str, status: str
+) -> ReportDetail:
+    """Manual review status (received / fixing / dismissed). `closed` is system-only (passing
+    retest) and final: a closed report can no longer be changed here."""
+    async with db.begin():
+        report = await load_visible_report(db, user_id, report_id)
+        if await org_role(db, user_id, report.org_id) not in WORKFLOW_ROLES:
+            raise ApiError(403, "FORBIDDEN", "제보 상태를 바꿀 권한이 없습니다.")
+        # Row lock so a concurrent auto-close is not overwritten.
+        await db.refresh(report, with_for_update=True)
+        if report.workflow_status == "closed":
+            raise ApiError(409, "REPORT_CLOSED", "재검증으로 마감된 제보는 변경할 수 없습니다.")
+        previous = report.workflow_status
+        if previous != status:
+            report.workflow_status = status
+            await db.flush()
+            await record_audit(
+                db,
+                actor_id=user_id,
+                org_id=report.org_id,
+                action="report.workflow",
+                target=report.id,
+                detail={"from": previous, "to": status},
+            )
+        await db.refresh(report)
+        return await _detail(db, report)

@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.test_condition import ConditionId
 from app.schemas.validation_job import JobBrief
 
 
@@ -220,6 +221,11 @@ class JobRequest(BaseModel):
     mode: Literal["fresh", "retest"]
     baseline_job_id: str | None = None
     app_version: str | None = None
+    # Condition comparison (fresh only): registered condition ids, run in this order, and/or
+    # let the model pick among them (or among all registered ones) up to `max_conditions`.
+    condition_ids: list[ConditionId] | None = Field(default=None, min_length=1, max_length=16)
+    auto_select_conditions: bool = False
+    max_conditions: int | None = Field(default=None, ge=1, le=8)
 
     @model_validator(mode="after")
     def _retest_fields(self):
@@ -227,4 +233,13 @@ class JobRequest(BaseModel):
             raise ValueError("retest requires baseline_job_id and app_version")
         if self.mode == "fresh" and (self.baseline_job_id or self.app_version):
             raise ValueError("fresh takes no baseline_job_id or app_version")
+        conditions = self.condition_ids or self.auto_select_conditions or self.max_conditions
+        if self.mode == "retest" and conditions:
+            raise ValueError("retest reuses the baseline's conditions")
+        if self.condition_ids and len(set(self.condition_ids)) != len(self.condition_ids):
+            raise ValueError("condition_ids must be unique")
+        if self.condition_ids and not self.auto_select_conditions and len(self.condition_ids) > 8:
+            raise ValueError("at most 8 conditions run in one job")
+        if self.max_conditions and not (self.condition_ids or self.auto_select_conditions):
+            raise ValueError("max_conditions needs condition_ids or auto_select_conditions")
         return self

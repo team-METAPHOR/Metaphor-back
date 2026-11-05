@@ -51,6 +51,13 @@ async def answer_question(
                 raise ApiError(409, "ALREADY_ANSWERED", "이미 답변한 질문입니다.")
             if source.status != "needs_info" or report.latest_job_id != source.id:
                 raise ApiError(409, "NOT_AWAITING_ANSWER", "답변을 기다리는 검증 작업이 아닙니다.")
+            if source.has_conditions:
+                # The engine has no matrix resume; request a new condition job instead.
+                raise ApiError(
+                    409,
+                    "CONDITION_RESUME_UNSUPPORTED",
+                    "조건 비교 작업은 답변 대신 새 검증을 요청해 주세요.",
+                )
             # The engine resumes from the stored (redacted) description plus every earlier answer.
             previous = (
                 await db.scalars(

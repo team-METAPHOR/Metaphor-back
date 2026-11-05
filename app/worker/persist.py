@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 from app.core.ids import new_id
 from app.core.text import redact, redact_tree
 from app.integrations import storage
+from app.worker import conditions
 
 logger = logging.getLogger(__name__)
 _KINDS = {".md": "report_md", ".png": "screenshot", ".json": "json", ".webm": "video"}
@@ -80,17 +81,21 @@ def read_events(engine_dir: Path) -> list[dict]:
         return []
 
 
-def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path) -> None:
+def sync_events(conn: psycopg.Connection, job_id: str, engine_dir: Path, source: str = "") -> None:
+    """Mirror one engine dir's events. `source` = "" for the job's own engine job, else the
+    per-condition child engine id (its sequence numbers restart at the child)."""
     events = read_events(engine_dir)
     if not events:
         return
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO job_events (job_id, engine_sequence, kind, detail, created_at) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (job_id, engine_sequence) DO NOTHING",
+            "INSERT INTO job_events (job_id, engine_source, engine_sequence, kind, detail, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (job_id, engine_source, engine_sequence) DO NOTHING",
             [
                 (
                     job_id,
+                    source,
                     e["sequence"],
                     e["kind"],
                     Jsonb(redact_tree(e.get("detail") or {})),
@@ -115,6 +120,7 @@ def persist_result(
     report_id: str,
     engine_dir: Path,
     retention_days: int,
+    child_dirs: tuple[Path, ...] = (),
 ) -> bool:
     """Apply the engine result if the job is still active. Returns False (and writes nothing)
     when the job already reached a terminal state elsewhere — a result never overwrites one."""
@@ -124,6 +130,21 @@ def persist_result(
     report = raw.get("report") or {}
     run = report.get("run") or {}
     verdict = run.get("verdict") or {}
+    matrix = report.get("schema_version") == conditions.SCHEMA
+    columns = (
+        conditions.summary(raw, report)
+        if matrix
+        else {
+            "verdict": verdict.get("value"),
+            "reason": verdict.get("reason_code"),
+            "classification": report.get("classification"),
+            "regression": report.get("regression"),
+            "error": raw.get("error_code"),
+            "questions": list(raw.get("questions") or []),
+            "analysis": report.get("analysis") is not None,
+            "review": report.get("human_review_required", True),
+        }
+    )
     with conn.transaction():
         cur = conn.execute(
             """
@@ -136,24 +157,20 @@ def persist_result(
             WHERE id = %(id)s AND status IN ('running', 'cancelling')
             """,
             {
+                **columns,
                 "id": job_id,
                 "status": raw["status"],
-                "verdict": verdict.get("value"),
-                "reason": verdict.get("reason_code"),
-                "classification": report.get("classification"),
-                "regression": report.get("regression"),
-                "error": raw.get("error_code"),
-                "questions": Jsonb(list(raw.get("questions") or [])),
-                "analysis": report.get("analysis") is not None,
-                "review": report.get("human_review_required", True),
+                "questions": Jsonb(columns["questions"]),
             },
         )
         if cur.rowcount != 1:
             return False
         conn.execute(
             "INSERT INTO qa_results (job_id, schema_version, raw) VALUES (%s, %s, %s)",
-            (job_id, int(report.get("schema_version") or 1), Jsonb(raw)),
+            (job_id, str(report.get("schema_version") or 1), Jsonb(raw)),
         )
+        if matrix:
+            conditions.store_rows(conn, job_id, report)
         for call in report.get("model_calls") or []:
             usage = call.get("usage") or {}
             conn.execute(
@@ -162,7 +179,7 @@ def persist_result(
                 (
                     job_id,
                     org_id,
-                    call.get("phase"),
+                    call.get("phase") or call.get("role"),  # matrix budget records: role
                     call.get("status"),
                     call.get("model"),
                     usage.get("input_tokens"),
@@ -170,7 +187,7 @@ def persist_result(
                 ),
             )
         expires = datetime.now(UTC) + timedelta(days=retention_days)
-        for path in sorted(engine_dir.iterdir()):
+        for path in sorted(p for d in (engine_dir, *child_dirs) for p in d.iterdir()):
             kind = artifact_kind(path)
             if kind is None or not path.is_file() or path.is_symlink():
                 continue
@@ -199,4 +216,6 @@ def persist_result(
                 ),
             )
         sync_events(conn, job_id, engine_dir)
+        for child in child_dirs:
+            sync_events(conn, job_id, child, source=child.name)
     return True

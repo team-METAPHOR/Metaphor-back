@@ -5,7 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
 from app.models import ProgramTestCondition
-from app.models.test_condition import MAX_REGISTERED_CONDITIONS
+from app.models.test_condition import (
+    DEFAULT_RUN_CONDITIONS,
+    MAX_REGISTERED_CONDITIONS,
+)
 from app.repositories import programs as programs_repo
 from app.repositories import test_conditions as repo
 from app.schemas.test_condition import TestConditionCreate, TestConditionPatch
@@ -168,3 +171,41 @@ async def delete_condition(db: AsyncSession, user_id: str, program_id: str, cond
             target=program.id,
             detail={"condition_id": condition_id},
         )
+
+
+async def selection_snapshot(
+    db: AsyncSession,
+    program_id: str,
+    condition_ids: list[str] | None,
+    auto_select: bool,
+    max_conditions: int | None,
+) -> dict:
+    """Snapshot keys for a condition-matrix job: the chosen registered conditions, frozen.
+
+    Ids are looked up in this program's registry only, so another program's or org's ids are
+    simply unknown (422). `max_conditions` defaults to the engine default (4) for auto
+    selection and to the number of ids otherwise."""
+    rows = {row.condition_id: row for row in await repo.list_for_program(db, program_id)}
+    if condition_ids:
+        unknown = [cid for cid in condition_ids if cid not in rows]
+        if unknown:
+            raise ApiError(
+                422,
+                "CONDITION_UNKNOWN",
+                "등록되지 않은 테스트 조건입니다.",
+                {"condition_ids": unknown},
+            )
+        chosen = [rows[cid] for cid in condition_ids]
+    else:
+        chosen = list(rows.values())
+    if not chosen:
+        raise ApiError(422, "NO_TEST_CONDITIONS", "등록된 테스트 조건이 없습니다.")
+    if auto_select:
+        limit = min(max_conditions or DEFAULT_RUN_CONDITIONS, len(chosen))
+    else:
+        limit = min(max_conditions or len(chosen), len(chosen))
+    return {
+        "conditions": [snapshot_entry(row) for row in chosen],
+        "condition_select": auto_select,
+        "max_conditions": limit,
+    }

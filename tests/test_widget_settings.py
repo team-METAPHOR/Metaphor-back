@@ -56,6 +56,9 @@ async def test_get_defaults_when_missing(client, world):
             "auto_detect_enabled": False,
             "live_screenshot_enabled": False,
             "updated_at": None,
+            "api_base": None,
+            "sdk_url": None,
+            "sdk_integrity": None,
         }
 
 

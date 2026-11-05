@@ -31,6 +31,10 @@ class WidgetSettingsResponse(BaseModel):
     auto_detect_enabled: bool
     live_screenshot_enabled: bool
     updated_at: datetime | None
+    # Install snippet inputs. All null when PUBLIC_API_BASE is unset (or no SDK bundle).
+    api_base: str | None
+    sdk_url: str | None
+    sdk_integrity: str | None
 
 
 class ProjectKeyResponse(BaseModel):

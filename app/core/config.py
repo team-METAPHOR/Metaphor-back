@@ -30,9 +30,17 @@ class Settings(BaseSettings):
     # RSA (>= 3072) public key PEM that seals program test accounts. Not secret: only the
     # worker's TEST_ACCOUNT_PRIVATE_KEY can open them. Unset → PUT test-account returns 503.
     test_account_public_key: str = Field(default="", repr=False)
+    # Public base URL of this API as customer sites reach it (e.g. https://api.metaphor.dev),
+    # used to build the Web SDK install snippet. Empty → widget-settings returns null URLs.
+    public_api_base: str = ""
     lease_seconds: int = 30
     # Engine QA limit (180s) plus cleanup headroom.
     worker_hard_deadline_seconds: int = 210
+
+    @field_validator("public_api_base")
+    @classmethod
+    def _strip_api_base(cls, base: str) -> str:
+        return base.strip().rstrip("/")
 
     @field_validator("allowed_origins")
     @classmethod

@@ -3,7 +3,7 @@
 고객사 웹사이트에 설치되는 Metaphor Web SDK(위젯)가 호출하는 공개 API 명세입니다.
 백엔드 코드를 몰라도 SDK를 구현할 수 있도록 요청·응답·오류·보안 규칙을 모두 적었습니다.
 기준 코드는 `app/api/v1/endpoints/widget.py`, `app/services/widget.py`, `app/schemas/widget.py`,
-`app/core/widget_cors.py`입니다. 이 문서와 코드가 다르면 코드가 맞고, 이 문서를 고쳐야 합니다.
+`app/core/widget_cors.py`, SDK 번들 서빙은 `app/api/sdk.py`입니다. 이 문서와 코드가 다르면 코드가 맞고, 이 문서를 고쳐야 합니다.
 
 ## 1. 개요
 
@@ -34,6 +34,54 @@
 
 `message`는 사람이 읽는 한국어 설명이며 바뀔 수 있습니다. **SDK는 `code`로 분기하세요.**
 모든 응답에는 `X-Request-Id` 헤더가 있습니다. 문의할 때 이 값을 함께 전달하면 됩니다.
+
+### SDK 설치
+
+SDK 번들은 API 서버가 직접 서빙하므로 고객사가 허용할 origin은 API origin 하나입니다.
+
+| 경로 | 캐시 | 용도 |
+|---|---|---|
+| `GET /sdk/v1/metaphor-<version>.js` | `public, max-age=31536000, immutable` | 설치 코드용. 현재 버전만 있고 다른 버전은 `404` |
+| `GET /sdk/v1/metaphor.js` | `public, max-age=300` | 항상 최신 버전. 내용이 바뀌므로 `integrity`를 붙이지 마세요 |
+
+- 인증·쿠키·CSRF가 없고 `GET`/`HEAD`를 받습니다. `ETag`가 있어 `If-None-Match`면 `304`입니다.
+- 응답 헤더: `Content-Type: text/javascript; charset=utf-8`, `Access-Control-Allow-Origin: *`,
+  `Cross-Origin-Resource-Policy: cross-origin`, `X-Content-Type-Options: nosniff`.
+- 번들 파일이 서버에 없으면 `503 SDK_UNAVAILABLE`입니다.
+
+설치 코드는 `GET /api/v1/programs/{id}/widget-settings` 응답 값으로 만듭니다.
+
+| 필드 | 예 | 설명 |
+|---|---|---|
+| `api_base` | `https://api.metaphor.example` | 서버 설정 `PUBLIC_API_BASE`. 끝에 `/` 없음 |
+| `sdk_url` | `https://api.metaphor.example/sdk/v1/metaphor-0.1.0.js` | 버전 고정 URL |
+| `sdk_integrity` | `sha384-…` | `sdk_url` 파일의 SRI 해시 |
+
+`PUBLIC_API_BASE`가 비어 있으면 세 값 모두 `null`입니다. 이때는 설치 코드를 보여 주지 말고
+운영자에게 설정을 요청하세요(서버는 요청 주소로 추측하지 않습니다).
+
+```html
+<script src="{sdk_url}"
+        integrity="{sdk_integrity}"
+        crossorigin="anonymous"
+        data-metaphor-project-key="{public_project_key}"
+        data-metaphor-api-base="{api_base}" defer></script>
+```
+
+- `crossorigin="anonymous"`가 없으면 브라우저가 `integrity`를 검사하지 못해 스크립트를 막습니다.
+- SDK 버전이 오르면 `sdk_url`과 `sdk_integrity`가 함께 바뀝니다. 고객사는 새 설치 코드로 교체합니다.
+  교체 전까지는 이전 코드가 `404`가 되므로 버전을 올릴 때 고객사에 안내해야 합니다.
+
+고객사 사이트에 CSP가 있으면 아래처럼 API origin을 허용합니다.
+
+```text
+Content-Security-Policy: script-src 'self' https://api.metaphor.example;
+                         connect-src 'self' https://api.metaphor.example;
+                         img-src 'self' data:
+```
+
+- `script-src`: SDK 번들 로드. `connect-src`: `/api/v1/widget/*` 호출.
+- `img-src data:`: SDK가 화면을 캡처할 때 `data:` URL 이미지를 씁니다. 없으면 스크린샷 없이 텍스트 신고만 됩니다.
 
 ## 2. 프로젝트 키와 Origin
 

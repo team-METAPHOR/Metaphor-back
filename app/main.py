@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.sdk import router as sdk_router
 from app.api.v1.router import api_router
 from app.core.body_limit import BodyLimitMiddleware
 from app.core.config import get_settings
@@ -39,3 +40,5 @@ app.middleware("http")(security_headers_middleware)
 app.middleware("http")(request_id_middleware)
 register_exception_handlers(app)
 app.include_router(api_router, prefix="/api/v1")
+# Public Web SDK bundle, outside /api: no auth, no CSRF, cacheable.
+app.include_router(sdk_router)

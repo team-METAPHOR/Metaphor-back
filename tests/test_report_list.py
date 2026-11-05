@@ -352,7 +352,12 @@ async def stats(client, world, query=""):
 
 
 async def test_stats_empty_org_nulls(client, world):
-    assert await stats(client, world) == {
+    body = await stats(client, world)
+    window = datetime.fromisoformat(body.pop("window_to")) - datetime.fromisoformat(
+        body.pop("window_from")
+    )
+    assert window == timedelta(days=7)
+    assert body == {
         "days": 7,
         "auto_reproduction_rate": None,
         "avg_reproduction_seconds": None,
@@ -433,3 +438,72 @@ async def test_naive_range_is_utc(client, db_session, world):
     later = (NOW - timedelta(hours=2)).replace(tzinfo=None).isoformat()
     response = await client.get("/api/v1/reports", params={"from": later}, headers=world["dev_h"])
     assert ids(response.json()) == []
+
+
+async def test_stats_explicit_window_and_program(client, db_session, world):
+    other = await make_program(db_session, world["org"])
+    await db_session.commit()
+
+    async def reproduced(program, created_at):
+        report = await seed(db_session, world, program_id=program.id, age=NOW - created_at)
+        await add_job(
+            db_session,
+            report,
+            verdict="reproduced",
+            created_at=created_at,
+            finished_at=created_at + timedelta(seconds=10),
+        )
+        await db_session.commit()
+
+    await reproduced(world["program"], NOW - timedelta(days=2))
+    await reproduced(other, NOW - timedelta(days=2))
+    await reproduced(world["program"], NOW - timedelta(days=20))  # outside the window
+    start, end = NOW - timedelta(days=3), NOW - timedelta(days=1)
+    window = f"?from={start.isoformat()}&to={end.isoformat()}".replace("+", "%2B")
+    both = await stats(client, world, window)
+    assert both["days"] == 2 and both["avg_reproduction_seconds"] == pytest.approx(10)
+    assert datetime.fromisoformat(both["window_from"]) == start
+    assert sum(p["count"] for p in both["by_page"]) == 2
+    one = await stats(client, world, window + f"&program_id={other.id}")
+    assert sum(p["count"] for p in one["by_page"]) == 1
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?from=2026-11-05T00:00:00Z&to=2026-11-01T00:00:00Z",
+        "?from=2026-01-01T00:00:00Z&to=2026-11-01T00:00:00Z",
+    ],
+)
+async def test_stats_rejects_bad_window(client, world, query):
+    response = await client.get(
+        f"/api/v1/orgs/{world['org'].id}/report-stats{query}", headers=world["dev_h"]
+    )
+    assert (response.status_code, response.json()["error"]["code"]) == (422, "VALIDATION_FAILED")
+
+
+async def test_stats_other_org_program_is_404(client, db_session, world):
+    stranger_org = await make_org(db_session)
+    foreign = await make_program(db_session, stranger_org)
+    await db_session.commit()
+    response = await client.get(
+        f"/api/v1/orgs/{world['org'].id}/report-stats?program_id={foreign.id}",
+        headers=world["dev_h"],
+    )
+    assert response.status_code == 404
+
+
+async def test_list_sort_ascending_pages_and_cursor(client, db_session, world):
+    made = [await seed(db_session, world, age=timedelta(minutes=10 - i)) for i in range(5)]
+    oldest_first = [r.id for r in made]
+    assert ids(await get(client, world, "?sort=created_asc&limit=2&page=2")) == oldest_first[2:4]
+    first = await get(client, world, "?sort=created_asc&limit=3")
+    assert ids(first) == oldest_first[:3]
+    rest = await get(client, world, f"?sort=created_asc&limit=3&cursor={first['next_cursor']}")
+    assert ids(rest) == oldest_first[3:]
+    assert ids(await get(client, world)) == oldest_first[::-1]
+
+
+async def test_list_rejects_unknown_sort(client, world):
+    response = await client.get("/api/v1/reports?sort=title", headers=world["dev_h"])
+    assert response.status_code == 422

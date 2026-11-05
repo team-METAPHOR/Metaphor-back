@@ -91,6 +91,7 @@
 | `from` / `to` | `created_at` 범위(ISO 8601). `from`은 포함, `to`는 제외. 시간대가 없으면 UTC로 봅니다. `from > to`이면 422. |
 | `q` | 제목·설명에서 대소문자 구분 없이 찾습니다. `%`, `_`도 글자 그대로 찾습니다. 최대 100자(넘으면 422). |
 | `source` / `program_id` / `assignee` | 기존 필터 그대로입니다. |
+| `sort` | `created_desc`(기본, 최신순) 또는 `created_asc`(오래된 순). 그 밖의 값은 422. 커서는 같은 `sort`로만 이어 씁니다. |
 
 `progress`는 저장된 열이 아니라 계산 값이지만, 필터는 SQL에서 같은 규칙(`progress_case`, `app/services/reports.py`)으로 걸러서 `total`과 페이지가 정확합니다. `verified`는 "가장 최근에 끝난 작업이 통과한 `retest`"를 상관 서브쿼리로 확인하고(`fix_verified`와 같은 규칙), `waiting_quota`는 `reports.run_blocked = 'quota'`로 확인합니다. 두 규칙이 어긋나지 않는지 테스트가 모든 조합을 비교합니다.
 
@@ -120,9 +121,15 @@
 - `counts`: 회사의 모든 제보(마감 포함)를 `progress`별로 셉니다. 모든 값이 키로 있고 없으면 0입니다. "재현 완료" 카드는 `reproduced + triaged`, "재현 중"은 `reproducing`, "신규"는 `new + waiting_quota`, "수정 확인됨"은 `verified`입니다.
 - `needs_attention`: 최신순 최대 5건. `progress`가 `reproduced`나 `waiting_quota`(한도 대기로 주차됨)이거나, 처리 상태가 `received`이고 끝난 최신 작업에서 아래 `required_actions`가 나오는 제보입니다(`needs_info`, 매핑된 오류·차단 코드). 항목의 `progress`도 목록과 같은 규칙(`fix_verified`, `run_blocked` 포함)으로 계산합니다. `reason`은 첫 번째 필요 조치 `{code, message}`이고(주차된 제보는 `WAIT_FOR_QUOTA`), 재현 완료라 검토만 남은 경우 `null`입니다.
 
-## 회사 재현 통계 (`GET /orgs/{org_id}/report-stats?days=7`)
+## 회사 재현 통계 (`GET /orgs/{org_id}/report-stats`)
 
-`viewer`를 포함한 구성원만 볼 수 있습니다. `days`는 1~90으로 맞춰 씁니다(범위 밖이면 오류 대신 가까운 끝값). 기간은 작업·제보의 `created_at` 기준입니다.
+`viewer`를 포함한 구성원만 볼 수 있습니다. 기간은 작업·제보의 `created_at` 기준입니다.
+
+- `from` / `to`(ISO 8601): `from`은 포함하고 `to`는 제외합니다. `to`를 생략하면 지금까지입니다. 기간은 최대 90일이고, `from >= to`이거나 90일을 넘으면 422 `VALIDATION_FAILED`를 반환합니다. "이번 주" 같은 기준(예: KST 월요일 00:00)은 프론트가 정해서 `from`으로 보냅니다.
+- `from`이 없으면 최근 `days`일입니다(기본 7). `days`는 1~90 범위로 맞추며, 범위를 벗어나면 오류 대신 가까운 끝값을 씁니다.
+- `program_id`: 한 프로그램만 집계합니다. 다른 회사의 프로그램이면 404입니다.
+- 응답의 `window_from`, `window_to`는 실제로 쓴 기간이고, `days`는 그 길이를 올림한 일수입니다.
+- 단계별 개수(`by_progress`)는 `GET /orgs/{org_id}/report-summary`의 `counts`를 씁니다.
 
 | 필드 | 계산 |
 |---|---|
@@ -132,6 +139,12 @@
 | `by_page` | 기간 안 제보의 페이지 경로 상위 10개 `[{path, count}]`(많은 순, 같으면 경로순). 위젯 `client_context.reported_url`, 없으면 `target_url`의 경로(쿼리·프래그먼트 제외). |
 
 "끝난"은 `completed` / `inconclusive` / `needs_info` / `failed`이고, `cancelled`는 재현 시도로 보지 않아 뺍니다.
+
+## 신고별 실행 목록 (`GET /reports/{report_id}/validation-jobs`)
+
+신고의 모든 실행(`initial` / `fresh` / `resume` / `retest`)을 최신순으로 `JobOut` 목록으로 돌려줍니다. `limit`(1~100, 기본 20)과 `cursor`로 페이지를 넘깁니다. 응답 형식은 `{"items": [...], "next_cursor": null}`입니다. 구성원이면 `viewer`도 볼 수 있고, 다른 회사의 신고면 404입니다. 소요 시간은 `finished_at - started_at`로 계산합니다.
+
+조건별 결과(2단계)는 엔진의 조건별 실행(Core_engine #9, Metaphor-back #55)이 들어온 다음에 추가합니다.
 
 ## 필요 조치 (`required_actions`)와 최근 시도 요약 (`best_attempt`)
 

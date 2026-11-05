@@ -149,22 +149,35 @@ async def list_visible(
     cursor: tuple[datetime, str] | None = None,
     offset: int = 0,
     where: Sequence[ColumnElement] = (),
+    ascending: bool = False,
 ) -> list[tuple[Report, ValidationJob | None, User | None, bool | None]]:
     """Reports of the user's active orgs, newest first, with latest job, assignee and whether
     the assignee is still an active member of the report's org. `where` may reference
-    `Report` and the latest `ValidationJob`. Returns up to `limit + 1` rows."""
+    `Report` and the latest `ValidationJob`. Newest first unless `ascending`; the cursor
+    continues in the same direction. Returns up to `limit + 1` rows."""
+    order = (
+        (Report.created_at.asc(), Report.id.asc())
+        if ascending
+        else (Report.created_at.desc(), Report.id.desc())
+    )
     query = (
         _visible(select(Report, ValidationJob, User, assignee_active()), user_id, where)
         .outerjoin(User, User.id == Report.assignee_id)
-        .order_by(Report.created_at.desc(), Report.id.desc())
+        .order_by(*order)
         .limit(limit + 1)
         .offset(offset)
     )
     if cursor is not None:
         moment, last_id = cursor
-        query = query.where(
-            or_(Report.created_at < moment, and_(Report.created_at == moment, Report.id < last_id))
-        )
+        if ascending:
+            after = or_(
+                Report.created_at > moment, and_(Report.created_at == moment, Report.id > last_id)
+            )
+        else:
+            after = or_(
+                Report.created_at < moment, and_(Report.created_at == moment, Report.id < last_id)
+            )
+        query = query.where(after)
     return [tuple(row) for row in (await db.execute(query)).all()]
 
 
@@ -205,8 +218,20 @@ async def newest_matching(
 STAT_STATUSES = ("completed", "inconclusive", "needs_info", "failed")
 
 
+def _window(created_at, program_col, since: datetime, until: datetime, program_id: str | None):
+    """`since` inclusive, `until` exclusive; optionally one program."""
+    conds = [created_at >= since, created_at < until]
+    if program_id is not None:
+        conds.append(program_col == program_id)
+    return conds
+
+
 async def reproduction_stats(
-    db: AsyncSession, org_id: str, since: datetime
+    db: AsyncSession,
+    org_id: str,
+    since: datetime,
+    until: datetime,
+    program_id: str | None = None,
 ) -> tuple[int, int, float | None]:
     """(finished initial jobs, of those whose report was reproduced by a finished initial or
     fresh job, average initial-job seconds from creation to finish) for initial jobs created
@@ -237,23 +262,30 @@ async def reproduction_stats(
             initial.c.kind == "initial",
             initial.c.status.in_(STAT_STATUSES),
             initial.c.finished_at.is_not(None),
-            initial.c.created_at >= since,
+            *_window(initial.c.created_at, Report.program_id, since, until, program_id),
         )
     )
     total, reproduced, avg = (await db.execute(query)).one()
     return total, reproduced, None if avg is None else float(avg)
 
 
-async def count_passed_retests(db: AsyncSession, org_id: str, since: datetime) -> int:
+async def count_passed_retests(
+    db: AsyncSession,
+    org_id: str,
+    since: datetime,
+    until: datetime,
+    program_id: str | None = None,
+) -> int:
     query = (
         select(func.count())
         .select_from(ValidationJob)
+        .join(Report, Report.id == ValidationJob.report_id)
         .where(
             ValidationJob.org_id == org_id,
             ValidationJob.kind == "retest",
             ValidationJob.status == "completed",
             ValidationJob.verdict == "not_reproduced",
-            ValidationJob.created_at >= since,
+            *_window(ValidationJob.created_at, Report.program_id, since, until, program_id),
         )
     )
     return await db.scalar(query)
@@ -267,14 +299,22 @@ def _url_path(url: ColumnElement) -> ColumnElement:
 
 
 async def top_pages(
-    db: AsyncSession, org_id: str, since: datetime, limit: int
+    db: AsyncSession,
+    org_id: str,
+    since: datetime,
+    until: datetime,
+    limit: int,
+    program_id: str | None = None,
 ) -> list[tuple[str, int]]:
     """Most reported page paths: the widget's reported_url, else the report's target_url."""
     url = func.coalesce(Report.client_context["reported_url"].astext, Report.target_url)
     path = _url_path(url).label("path")
     query = (
         select(path, func.count())
-        .where(Report.org_id == org_id, Report.created_at >= since)
+        .where(
+            Report.org_id == org_id,
+            *_window(Report.created_at, Report.program_id, since, until, program_id),
+        )
         .group_by(path)
         .order_by(func.count().desc(), path)
         .limit(limit)

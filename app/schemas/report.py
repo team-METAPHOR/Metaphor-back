@@ -133,9 +133,12 @@ class PageCount(BaseModel):
 
 
 class ReportStats(BaseModel):
-    """Over jobs/reports created in the last `days` days (1..90)."""
+    """Over jobs/reports created in [`window_from`, `window_to`) (at most 90 days); `days` is
+    its length rounded up."""
 
     days: int
+    window_from: datetime
+    window_to: datetime
     auto_reproduction_rate: float | None
     avg_reproduction_seconds: float | None
     fix_verified_count: int

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Path, Query, Response
@@ -100,7 +101,22 @@ async def report_summary(org_id: str, user: CurrentUser, db: DbSession):
 
 @router.get("/orgs/{org_id}/report-stats", response_model=ReportStats)
 async def report_stats(
-    org_id: str, user: CurrentUser, db: DbSession, days: Annotated[int, Query()] = 7
+    org_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    days: Annotated[int, Query()] = 7,
+    window_from: Annotated[datetime | None, Query(alias="from")] = None,
+    window_to: Annotated[datetime | None, Query(alias="to")] = None,
+    program_id: str | None = None,
 ):
-    """Reproduction metrics over the last `days` days (clamped to 1..90)."""
-    return await reports.report_stats(db, user.id, org_id, days)
+    """Reproduction metrics over `from`..`to` (to exclusive, default now; at most 90 days), or
+    the last `days` days (clamped to 1..90) when `from` is absent. Optional `program_id`."""
+    return await reports.report_stats(
+        db,
+        user.id,
+        org_id,
+        days,
+        window_from=window_from,
+        window_to=window_to,
+        program_id=program_id,
+    )

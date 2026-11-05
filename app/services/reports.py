@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import secrets
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from app.core.ids import new_id
 from app.core.pagination import decode_cursor, encode_cursor
 from app.core.text import sanitize_text
 from app.integrations import storage
-from app.models import Artifact, ProgramScopeRevision, Report, User, ValidationJob
+from app.models import Artifact, Program, ProgramScopeRevision, Report, User, ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import orgs as orgs_repo
 from app.repositories import programs as programs_repo
@@ -375,6 +376,7 @@ async def list_reports(
     created_to: datetime | None = None,
     q: str | None = None,
     page: int | None = None,
+    sort: str = "created_desc",
 ) -> ReportList:
     """`assignee` is a user id, or "me" for the caller. Closed reports are left out unless
     `include_closed` or `progress` asks for them. With `cursor` the list is cursor-paged
@@ -406,6 +408,7 @@ async def list_reports(
             cursor=position,
             offset=(page_no - 1) * limit if page_no else 0,
             where=where,
+            ascending=sort == "created_asc",
         )
         total = await reports_repo.count_visible(db, user_id, where) if page_no else None
         verified = await reports_repo.fix_verified_ids(db, [row[0].id for row in rows[:limit]])
@@ -421,6 +424,12 @@ async def list_reports(
 async def _require_member(db: AsyncSession, user_id: str, org_id: str) -> None:
     if await org_role(db, user_id, org_id) is None:
         raise ApiError(404, "NOT_FOUND", "조직을 찾을 수 없습니다.")
+
+
+async def _require_program(db: AsyncSession, org_id: str, program_id: str) -> None:
+    program = await db.get(Program, program_id)
+    if program is None or program.owner_org_id != org_id:
+        raise ApiError(404, "NOT_FOUND", "프로그램을 찾을 수 없습니다.")
 
 
 ATTENTION_LIMIT = 5
@@ -471,18 +480,44 @@ STATS_MAX_DAYS = 90
 TOP_PAGES = 10
 
 
-async def report_stats(db: AsyncSession, user_id: str, org_id: str, days: int) -> ReportStats:
-    days = min(max(days, 1), STATS_MAX_DAYS)
-    window_start = datetime.now(UTC) - timedelta(days=days)
+async def report_stats(
+    db: AsyncSession,
+    user_id: str,
+    org_id: str,
+    days: int,
+    *,
+    window_from: datetime | None = None,
+    window_to: datetime | None = None,
+    program_id: str | None = None,
+) -> ReportStats:
+    """Window: `from` (inclusive) .. `to` (exclusive, default now); without `from` it is the
+    last `days` days (clamped 1..90). An explicit window may span at most 90 days."""
+    window_from, window_to = _utc(window_from), _utc(window_to)
+    until = window_to or datetime.now(UTC)
+    if window_from is None:
+        days = min(max(days, 1), STATS_MAX_DAYS)
+        since = until - timedelta(days=days)
+    else:
+        since = window_from
+        if since >= until:
+            raise ApiError(422, "VALIDATION_FAILED", "from은 to보다 앞서야 합니다.")
+        if until - since > timedelta(days=STATS_MAX_DAYS):
+            raise ApiError(422, "VALIDATION_FAILED", "기간은 최대 90일입니다.")
+        days = math.ceil((until - since) / timedelta(days=1))
     async with db.begin():
         await _require_member(db, user_id, org_id)
+        if program_id is not None:
+            await _require_program(db, org_id, program_id)
+        window = (since, until)
         finished, reproduced, avg_seconds = await reports_repo.reproduction_stats(
-            db, org_id, window_start
+            db, org_id, *window, program_id
         )
-        verified = await reports_repo.count_passed_retests(db, org_id, window_start)
-        pages = await reports_repo.top_pages(db, org_id, window_start, TOP_PAGES)
+        verified = await reports_repo.count_passed_retests(db, org_id, *window, program_id)
+        pages = await reports_repo.top_pages(db, org_id, *window, TOP_PAGES, program_id)
     return ReportStats(
         days=days,
+        window_from=since,
+        window_to=until,
         auto_reproduction_rate=reproduced / finished if finished else None,
         avg_reproduction_seconds=avg_seconds,
         fix_verified_count=verified,

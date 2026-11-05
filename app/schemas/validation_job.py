@@ -27,6 +27,11 @@ class JobOut(BaseModel):
     finished_at: datetime | None
 
 
+class JobList(BaseModel):
+    items: list[JobOut]
+    next_cursor: str | None
+
+
 class JobBrief(BaseModel):
     id: str
     kind: str

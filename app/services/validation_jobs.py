@@ -4,10 +4,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.core.pagination import decode_cursor, encode_cursor
 from app.models import ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import validation_jobs as jobs_repo
-from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
+from app.schemas.validation_job import EventList, EventOut, JobList, JobOut, JobResult
 from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.reports import load_visible_report
@@ -25,6 +26,22 @@ async def get_job(db: AsyncSession, user_id: str, job_id: str) -> JobOut:
     async with db.begin():
         job, _ = await load_visible_job(db, user_id, job_id)
         return JobOut.model_validate(job, from_attributes=True)
+
+
+async def list_report_jobs(
+    db: AsyncSession, user_id: str, report_id: str, *, limit: int, cursor: str | None
+) -> JobList:
+    """Every run of a report (initial, fresh, resume, retest), newest first."""
+    position = decode_cursor(cursor) if cursor else None
+    async with db.begin():
+        await load_visible_report(db, user_id, report_id)
+        rows = await jobs_repo.list_for_report(db, report_id, limit, position)
+    page = rows[:limit]
+    next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+    return JobList(
+        items=[JobOut.model_validate(job, from_attributes=True) for job in page],
+        next_cursor=next_cursor,
+    )
 
 
 async def get_result(db: AsyncSession, user_id: str, job_id: str) -> JobResult:

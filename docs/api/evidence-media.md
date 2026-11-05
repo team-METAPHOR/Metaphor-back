@@ -1,6 +1,6 @@
 # 재현 영상·Playwright 테스트 API
 
-엔진(core_engine 0.8.5, `9e8e5c2` 고정)이 만든 마스킹 재현 영상(WebM)과 내보낸 Playwright 테스트(`reproduction.spec.ts`)를 근거 파일로 저장하고 내려줍니다. 권한·만료·감사 기록은 다른 근거 파일과 같습니다(소유 조직 활성 멤버만, 다른 조직·만료 파일은 404, 내려받을 때마다 `evidence.download` 감사 기록).
+엔진(core_engine 0.8.6, `f2d5227` 고정)이 만든 마스킹 재현 영상(WebM)과 내보낸 Playwright 테스트(`reproduction.spec.ts`)를 근거 파일로 저장하고 내려줍니다. 권한·만료·감사 기록은 다른 근거 파일과 같습니다(소유 조직 활성 멤버만, 다른 조직·만료 파일은 404, 내려받을 때마다 `evidence.download` 감사 기록).
 
 ## 영상 켜기 (운영자)
 

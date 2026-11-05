@@ -11,6 +11,7 @@ from app.models.identity import (
     Session,
     User,
 )
+from app.models.live_preview import LivePreview
 from app.models.program import OriginVerification, Program, ProgramScopeRevision
 from app.models.report import Clarification, Report, ReportDuplicate
 from app.models.test_account import ProgramTestAccount
@@ -31,6 +32,7 @@ __all__ = [
     "Clarification",
     "IdempotencyRecord",
     "JobEvent",
+    "LivePreview",
     "Membership",
     "ModelUsage",
     "OrgInvite",

@@ -181,7 +181,14 @@ def retest_outcome(rows: list[dict], status: str) -> tuple[str, str, str]:
 
 
 async def retest_all(
-    service, matrix_job_id: str, condition_ids: list[str], *, on_start, cancelled, **callbacks
+    service,
+    matrix_job_id: str,
+    condition_ids: list[str],
+    *,
+    on_start,
+    cancelled,
+    live_factory=None,
+    **callbacks,
 ) -> ConditionsResult:
     """Re-run every condition that reproduced in the matrix baseline, one after another, each
     with its stored child plan. No engine job of its own: only per-condition children."""
@@ -209,8 +216,9 @@ async def retest_all(
         on_start(condition_id)
         begin = time.monotonic()
         try:
+            extra = {"live": live_factory(condition_id)} if live_factory else {}
             result = await service.retest(
-                matrix_job_id, condition_id, cancelled=cancelled, **callbacks
+                matrix_job_id, condition_id, cancelled=cancelled, **callbacks, **extra
             )
         except PolicyError as exc:
             status, error = ("cancelled" if exc.code == "CANCELLED" else "failed"), exc.code

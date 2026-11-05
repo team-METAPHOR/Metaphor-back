@@ -1,7 +1,7 @@
 # vendor
 
-`metaphor_core_engine-0.8.5-py3-none-any.whl` is built from the private repository
-`team-METAPHOR/Core_engine` at commit `9e8e5c290b809170e217e5717eca34243d8ab912`
+`metaphor_core_engine-0.8.6-py3-none-any.whl` is built from the private repository
+`team-METAPHOR/Core_engine` at commit `f2d5227f852d3f8fe5a438cdefd2c5756993bde8`
 (`uv build --wheel`). It is vendored so CI and new checkouts install the engine without
 a cross-repository access token.
 

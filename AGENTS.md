@@ -82,8 +82,8 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 - Same feature name across layers: `endpoints/reports.py`, `services/reports.py`,
   `repositories/reports.py`, `models/report.py`, `schemas/report.py`.
 - The API process never imports Playwright or runs `QAService`. It may import
-  `core_engine.Screenshot`, `core_engine.RunPolicy`, `core_engine.canonical_url`,
-  and `core_engine.redaction.redact_text`.
+  `core_engine.Screenshot`, `core_engine.RunPolicy`, `core_engine.StateChangePolicy`,
+  `core_engine.canonical_url`, and `core_engine.redaction.redact_text`.
 - The queue is the `validation_jobs` table (`FOR UPDATE SKIP LOCKED`). Do not add a broker.
 
 ## 4. Invariants (do not break)

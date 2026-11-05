@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import ARRAY, Boolean, CheckConstraint, DateTime, Integer, String, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -55,6 +56,9 @@ class ProgramScopeRevision(Base):
     # Reference into the worker secret store; never the secret itself.
     session_secret_ref: Mapped[str | None] = mapped_column(String(100))
     reset_adapter: Mapped[str] = mapped_column(String(64))
+    # Admin-approved test writes (core_engine 0.6.0 StateChangePolicy.public()); None = read
+    # only. Only this revision setting enables writes: never report text, SDK data or a model.
+    state_changes: Mapped[dict | None] = mapped_column(JSONB)
     # Operator-only (not settable through the customer API).
     allow_private_targets: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     private_cidrs: Mapped[list[str]] = text_array()

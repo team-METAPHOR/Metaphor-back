@@ -35,6 +35,7 @@ from psycopg.rows import dict_row
 
 from app.core import credentials
 from app.integrations import storage
+from app.integrations.state_changes import state_change_policy
 from app.models.test_account import login_applies
 from app.worker import conditions as matrix
 from app.worker import live, queue
@@ -152,6 +153,8 @@ def build_policy(snapshot: dict) -> RunPolicy:
         excluded_path_prefixes=tuple(snapshot["excluded_path_prefixes"]),
         allow_private_targets=snapshot.get("allow_private_targets", False),
         private_cidrs=tuple(snapshot.get("private_cidrs", ())),
+        # Admin approval frozen in the snapshot; absent (older jobs) or null = read-only.
+        state_changes=state_change_policy(snapshot.get("state_changes")),
     )
 
 

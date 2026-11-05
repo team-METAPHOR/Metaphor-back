@@ -200,3 +200,28 @@ async def test_missing_condition_404(client, world):
     response = await client.patch(url(world, "/nope"), json={"width": 400}, headers=world["admin"])
     assert response.status_code == 404
     assert (await client.delete(url(world, "/nope"), headers=world["admin"])).status_code == 404
+
+
+async def test_condition_session_on_http_origin_rejected(client, world, db_session):
+    from app.models import ProgramScopeRevision
+
+    await add(client, world)
+    await db_session.execute(update(ProgramTestCondition).values(session_secret_ref=SECRET_REF))
+    await db_session.commit()
+    program_url = f"/api/v1/programs/{world['program'].id}"
+    moved = await client.patch(
+        program_url, json={"base_url": "http://staging.example.com"}, headers=world["admin"]
+    )
+    assert moved.json()["error"]["code"] == "CREDENTIALS_REQUIRE_HTTPS"
+    # Legacy data: an HTTP origin with a bound condition session can't be kept on edit.
+    await db_session.execute(
+        update(ProgramScopeRevision)
+        .where(ProgramScopeRevision.program_id == world["program"].id)
+        .values(base_url="http://staging.example.com")
+    )
+    await db_session.commit()
+    response = await client.patch(
+        url(world, "/staff-chromium"), json={"width": 1024}, headers=world["admin"]
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "CREDENTIALS_REQUIRE_HTTPS"

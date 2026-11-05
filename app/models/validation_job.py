@@ -32,7 +32,7 @@ JOB_STATUSES = (
 )
 ACTIVE_JOB_STATUSES = ("queued", "running", "cancelling")
 VERDICTS = ("reproduced", "not_reproduced", "inconclusive")
-ENGINE_COMMIT = "e396348"
+ENGINE_COMMIT = "0f833d2"
 
 _active = ", ".join(f"'{s}'" for s in ACTIVE_JOB_STATUSES)
 

@@ -23,6 +23,7 @@ from core_engine import (
     JobStore,
     LoginOptions,
     OpenAIModel,
+    PolicyError,
     QARequest,
     QAService,
     RunPolicy,
@@ -31,6 +32,7 @@ from core_engine import (
 from core_engine.video import find_encoder
 from psycopg.rows import dict_row
 
+from app.core import credentials
 from app.integrations import storage
 from app.models.test_account import login_applies
 from app.worker import conditions as matrix
@@ -341,6 +343,9 @@ def execute_job(job_id: str, *, model=None, reviewer=_FROM_ENV) -> None:
             _execute(conn, job_id, data, model, reviewer)
         except JobInputError as error:
             queue.finish_if_active(conn, job_id, "failed", error.code)
+        except PolicyError as error:
+            # Engine constructor checks (e.g. CREDENTIALS_REQUIRE_HTTPS): a stable code.
+            queue.finish_if_active(conn, job_id, "failed", error.code)
         except (ValueError, KeyError):
             logger.exception("invalid job input for %s", job_id)
             queue.finish_if_active(conn, job_id, "failed", "INVALID_JOB_INPUT")
@@ -410,6 +415,12 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         from app.worker.test_accounts import load_login
 
         login = load_login(conn, program["id"])
+    uses_credentials = login is not None or any(
+        c.get("session_secret_ref") for c in conditions or [snapshot]
+    )
+    if uses_credentials and not credentials.is_https(snapshot["base_url"]):
+        # Same rule as the API and the engine; never downgrade or retry over HTTP.
+        raise JobInputError(credentials.CODE)
     if conditions:
         service = ConditionsService(
             model,

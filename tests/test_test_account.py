@@ -4,11 +4,11 @@ import logging
 from dataclasses import replace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core import test_account_crypto as crypto
 from app.core.config import get_settings
-from app.models import AuditEvent, ProgramTestAccount
+from app.models import AuditEvent, ProgramScopeRevision, ProgramTestAccount
 from app.services.test_accounts import WRITES_PER_HOUR, mask_login_id
 from app.worker import keys
 from app.worker.runner import JobInputError
@@ -349,3 +349,65 @@ async def test_moving_base_url_drops_test_account(client, db_session):
     assert moved.status_code == 200, moved.text
     after = await client.get(url(world), headers=world["admin"])
     assert after.json()["configured"] is False
+
+
+# --- HTTPS only (engine 0.4.1 CREDENTIALS_REQUIRE_HTTPS) --------------------------------
+
+
+async def test_put_on_http_origin_rejected(client, db_session):
+    # No localhost/private exception: any non-HTTPS origin is refused.
+    for base_url in ("http://staging.example.com", "http://localhost:3000"):
+        world = await seeded(client, db_session, base_url=base_url)
+        response = await client.put(url(world), json=LOGIN_BODY, headers=world["admin"])
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "CREDENTIALS_REQUIRE_HTTPS"
+        assert (await client.get(url(world), headers=world["viewer"])).json()["configured"] is False
+
+
+async def test_https_to_http_with_account_rejected(client, db_session):
+    world = await seeded(client, db_session)
+    saved = await client.put(url(world), json=LOGIN_BODY, headers=world["admin"])
+    assert saved.status_code == 200
+    program_url = f"/api/v1/programs/{world['program'].id}"
+    moved = await client.patch(
+        program_url, json={"base_url": "http://staging.example.com"}, headers=world["admin"]
+    )
+    assert moved.status_code == 422
+    assert moved.json()["error"]["code"] == "CREDENTIALS_REQUIRE_HTTPS"
+    kept = (await client.get(program_url, headers=world["admin"])).json()["scope"]
+    assert kept["base_url"].startswith("https://") and kept["has_test_account"] is True
+    assert kept["credentials_blocked_by_http"] is False
+
+
+async def test_legacy_http_account_flagged(client, db_session):
+    world = await seeded(client, db_session)
+    saved = await client.put(url(world), json=LOGIN_BODY, headers=world["admin"])
+    assert saved.status_code == 200
+    await db_session.execute(
+        update(ProgramScopeRevision)
+        .where(ProgramScopeRevision.program_id == world["program"].id)
+        .values(base_url="http://staging.example.com")
+    )
+    await db_session.commit()
+    response = await client.get(f"/api/v1/programs/{world['program'].id}", headers=world["admin"])
+    assert response.json()["scope"]["credentials_blocked_by_http"] is True
+    assert PASSWORD not in response.text and LOGIN_ID not in response.text
+
+
+async def test_in_use_false_on_http_origin(client, db_session):
+    """Legacy HTTP program with a saved account: the account exists but is never used."""
+    from sqlalchemy import update
+
+    from app.models import ProgramScopeRevision
+
+    world = await seeded(client, db_session, test_context_id="member")
+    body = {**BODY, "success_path": "/app"}
+    assert (await client.put(url(world), json=body, headers=world["admin"])).status_code == 200
+    await db_session.execute(
+        update(ProgramScopeRevision)
+        .where(ProgramScopeRevision.program_id == world["program"].id)
+        .values(base_url="http://staging.example.com/")
+    )
+    await db_session.commit()
+    got = (await client.get(url(world), headers=world["admin"])).json()
+    assert (got["configured"], got["in_use"]) == (True, False)

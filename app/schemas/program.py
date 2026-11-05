@@ -86,6 +86,9 @@ class ScopeResponse(BaseModel):
     # A test account is saved (GET /programs/{id}/test-account has the details; its `in_use`
     # tells whether runs on the current scope sign in with it).
     has_test_account: bool = False
+    # Stored credentials on an HTTP origin (saved before engine 0.4.1): runs that would use
+    # them fail with CREDENTIALS_REQUIRE_HTTPS until the program is registered on HTTPS.
+    credentials_blocked_by_http: bool = False
     reset_adapter: str
     created_at: datetime
 

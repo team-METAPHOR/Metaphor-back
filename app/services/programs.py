@@ -3,6 +3,7 @@ import re
 from core_engine import BrowserOptions, PolicyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import credentials
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision
@@ -70,6 +71,22 @@ _OPERATOR_FIELDS = ("session_secret_ref", "allow_private_targets", "private_cidr
 
 def _scope_values(revision: ProgramScopeRevision) -> dict:
     return {field: getattr(revision, field) for field in (*SCOPE_FIELDS, *_OPERATOR_FIELDS)}
+
+
+async def _has_credentials(db: AsyncSession, program_id: str, revision) -> bool:
+    """An operator session, a saved test account, or a condition session exists."""
+    return (
+        revision.session_secret_ref is not None
+        or await test_accounts_repo.is_configured(db, program_id)
+        or await conditions_repo.has_sessions(db, program_id)
+    )
+
+
+def credentials_blocked_by_http(revision: ProgramScopeRevision, has_test_account: bool) -> bool:
+    """Stored credentials (legacy data) that core_engine 0.4.1 will refuse on this HTTP origin."""
+    return not credentials.is_https(revision.base_url) and (
+        revision.session_secret_ref is not None or has_test_account
+    )
 
 
 async def create_program(db: AsyncSession, user_id: str, body: ProgramCreate):
@@ -160,6 +177,12 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
                 candidate.session_secret_ref = revision.session_secret_ref
                 _validated(candidate)  # re-check run options with the session restored
             else:
+                if not credentials.is_https(candidate.base_url) and await _has_credentials(
+                    db, program.id, revision
+                ):
+                    # Never silently drop and never keep credentials for an HTTP origin:
+                    # remove them first (or stay on HTTPS).
+                    credentials.require_https(candidate.base_url)
                 # Condition sessions are bound to the old origin too.
                 await conditions_repo.unbind_sessions(db, program.id)
                 # So is a saved test account: never send its credentials to a new site.

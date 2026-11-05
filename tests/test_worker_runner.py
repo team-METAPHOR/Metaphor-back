@@ -485,3 +485,39 @@ def test_conditions_sign_in_only_where_login_applies():
     }
     built = matrix.build_conditions(snapshot, None, lambda org, ref: {}, login=login)
     assert [c.options.login for c in built] == [login, None]
+
+
+async def test_http_origin_with_session_fails_before_engine(db_session, conn, monkeypatch):
+    # Legacy data saved before engine 0.4.1: the worker re-checks and never runs over HTTP.
+    program, job_id = await queued_job(
+        db_session, conn, session_secret_ref="shop", test_context_id="synthetic-1"
+    )
+    conn.execute(
+        "UPDATE validation_jobs SET scope_snapshot = jsonb_set(scope_snapshot, '{base_url}', "
+        "'\"http://staging.example.com\"') WHERE id = %s",
+        (job_id,),
+    )
+    name = runner.session_secret_env_name(program.owner_org_id, "shop")
+    monkeypatch.setenv(name, json.dumps({"Cookie": "sid=s"}))
+    model = ScriptedModel([intake("needs_info")])
+    await asyncio.to_thread(runner.execute_job, job_id, model=model)
+    job = await job_row(db_session, job_id)
+    assert (job.status, job.backend_error_code) == ("failed", "CREDENTIALS_REQUIRE_HTTPS")
+    assert model.calls == []
+
+
+def test_engine_rejects_http_session():
+    # The engine enforces the same rule in its constructor (mapped by execute_job).
+    from core_engine import BrowserOptions, PolicyError
+
+    snapshot = {
+        "program_id": "p1",
+        "scope_revision": 1,
+        "base_url": "http://staging.example.com",
+        "allowed_path_prefixes": ["/"],
+        "excluded_path_prefixes": [],
+    }
+    options = BrowserOptions(test_context_id="synthetic-1", session_headers={"Cookie": "a"})
+    with pytest.raises(PolicyError) as error:
+        runner.QAService(None, runner.build_policy(snapshot), None, options=options)
+    assert error.value.code == "CREDENTIALS_REQUIRE_HTTPS"

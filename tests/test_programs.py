@@ -307,3 +307,31 @@ async def test_auto_fresh_retries_default_set_and_bounded(client, world, db_sess
     for bad in (3, None):
         response = await client.patch(url, json={"auto_fresh_retries": bad}, headers=world["admin"])
         assert response.status_code == 422
+
+
+async def test_anonymous_http_program_allowed(client, world):
+    program = await created(
+        client, world, base_url="http://localhost:3000", test_context_id="anonymous"
+    )
+    assert program["scope"]["credentials_blocked_by_http"] is False
+    moved = await client.patch(
+        f"/api/v1/programs/{program['id']}",
+        json={"base_url": "http://staging.example.com"},
+        headers=world["admin"],
+    )
+    assert moved.status_code == 200, moved.text
+
+
+async def test_https_to_http_with_session_rejected(client, world, db_session):
+    program = await created(client, world)
+    await bind_session(db_session, program["id"])
+    url = f"/api/v1/programs/{program['id']}"
+    moved = await client.patch(
+        url, json={"base_url": "http://staging.example.com"}, headers=world["admin"]
+    )
+    assert moved.status_code == 422
+    assert moved.json()["error"]["code"] == "CREDENTIALS_REQUIRE_HTTPS"
+    assert (await db_session.get(Program, program["id"])).current_revision == 1
+    # Authenticated HTTPS stays allowed.
+    edited = await client.patch(url, json={"width": 1024}, headers=world["admin"])
+    assert edited.status_code == 200 and edited.json()["scope"]["has_session"] is True

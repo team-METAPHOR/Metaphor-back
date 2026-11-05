@@ -3,6 +3,7 @@
 from core_engine import BrowserOptions, TestCondition
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import credentials
 from app.core.errors import ApiError
 from app.models import ProgramTestCondition
 from app.models.test_condition import (
@@ -143,6 +144,10 @@ async def update_condition(
         for field in changed:
             setattr(row, field, changes[field])
         _validated(row)
+        if row.session_secret_ref is not None:
+            # The bound session would be sent to the program origin (engine 0.4.1: HTTPS only).
+            revision = await programs_repo.get_revision(db, program)
+            credentials.require_https(revision.base_url)
         await db.flush()
         await record_audit(
             db,

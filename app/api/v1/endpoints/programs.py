@@ -45,6 +45,9 @@ def _full(
             mask_selectors=revision.mask_selectors,
             has_session=revision.session_secret_ref is not None or has_test_account,
             has_test_account=has_test_account,
+            credentials_blocked_by_http=service.credentials_blocked_by_http(
+                revision, has_test_account
+            ),
             reset_adapter=revision.reset_adapter,
             created_at=revision.created_at,
         ),

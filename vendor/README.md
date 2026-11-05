@@ -24,9 +24,9 @@ computes the SRI hash from the bytes, so the hash below is for reference only.
 
 | Field | Value |
 |---|---|
-| Version | `0.1.1` |
-| Source | GitHub Release `v0.1.1` of `team-METAPHOR/Metaphor-sdk` @ `adeebea6d6a46bd77db7c0031ea4d24733083be4` (`scripts/vendor-sdk.sh v0.1.1`) |
-| SRI | `sha384-40tPvdAPO7apKv4/QsIttvbVK4EYjfJhclZ+kNlhblxv/0IIFgduaY280rWd1blb` (matches the release's `metaphor.js.sha384`) |
+| Version | `0.1.2` |
+| Source | GitHub Release `v0.1.2` of `team-METAPHOR/Metaphor-sdk` @ `a6c59eb9930c8b08ac36a6780a63bfea0fc6ea63` (`scripts/vendor-sdk.sh v0.1.2`) |
+| SRI | `sha384-1cyl5o5EMjlRHpJ3i3zf5SGCEAh7Mcyy8Joo6uGrcoi5iKfdZ/fuOSH/SpYbRiTf` (matches the release's `metaphor.js.sha384`) |
 
 `sdk/VERSION` holds the version on line 1 and the SDK commit on line 2. The version is the
 pinned URL (`metaphor-<version>.js`, cached as `immutable`), so **never change the bundle
@@ -35,7 +35,7 @@ without bumping the version**.
 To re-vendor from a GitHub Release asset:
 
 ```bash
-scripts/vendor-sdk.sh v0.1.1      # downloads metaphor.js, writes VERSION, prints the SRI
+scripts/vendor-sdk.sh v0.1.2      # downloads metaphor.js, writes VERSION, prints the SRI
 # update the table above, then:
 git add -f vendor/sdk && uv run pytest -q tests/test_sdk_serving.py
 ```

@@ -36,7 +36,7 @@ from app.core import credentials
 from app.integrations import storage
 from app.models.test_account import login_applies
 from app.worker import conditions as matrix
-from app.worker import queue
+from app.worker import live, queue
 from app.worker.main import sync_database_url
 from app.worker.persist import persist_result, sync_events
 from app.worker.resets import RESETS
@@ -291,7 +291,7 @@ def engine_description(job: dict, report: dict) -> str:
     return description[:ENGINE_DESCRIPTION_LIMIT]
 
 
-async def _call_engine(service, data: dict, reset, monitor: Monitor):
+async def _call_engine(service, data: dict, reset, monitor: Monitor, relay: live.LiveRelay):
     job, report = data["job"], data["report"]
     callbacks = {
         "reset": reset,
@@ -305,17 +305,23 @@ async def _call_engine(service, data: dict, reset, monitor: Monitor):
             data["source_engine_id"],
             snapshot["retest_condition_ids"],
             on_start=monitor.current_condition.append,
+            live_factory=relay.factory,
             **callbacks,
         )
     if isinstance(service, ConditionsService):
         return await service.run(
-            _request(job, report, data), **callbacks, select=snapshot["condition_select"]
+            _request(job, report, data),
+            **callbacks,
+            select=snapshot["condition_select"],
+            **({"live_factory": relay.factory} if relay.enabled else {}),
         )
     if job["kind"] == "resume":
-        return await service.resume(data["source_engine_id"], job["answers"], **callbacks)
+        return await service.resume(
+            data["source_engine_id"], job["answers"], **callbacks, **relay.stream_kwargs()
+        )
     if job["kind"] == "retest":
-        return await service.retest(data["source_engine_id"], **callbacks)
-    return await service.run(_request(job, report, data), **callbacks)
+        return await service.retest(data["source_engine_id"], **callbacks, **relay.stream_kwargs())
+    return await service.run(_request(job, report, data), **callbacks, **relay.stream_kwargs())
 
 
 def _request(job: dict, report: dict, data: dict) -> QARequest:
@@ -355,6 +361,9 @@ def execute_job(job_id: str, *, model=None, reviewer=_FROM_ENV) -> None:
         except Exception:
             logger.exception("unexpected worker failure for %s", job_id)
             queue.finish_if_active(conn, job_id, "failed", "WORKER_UNEXPECTED")
+        finally:
+            # The job is terminal (or never ran): no viewer may keep seeing it as live.
+            live.safe_delete(conn, job_id)
 
 
 def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer) -> None:
@@ -438,23 +447,30 @@ def _execute(conn: psycopg.Connection, job_id: str, data: dict, model, reviewer)
         service = build_service(snapshot, store, model, job["app_version"], reviewer, login)
         contexts = [snapshot["test_context_id"]]
 
-    # Jobs sharing a synthetic account/data set run one at a time. A matrix job holds every
-    # context it may use, taken in sorted order so two matrix jobs can't deadlock.
-    # ponytail: per-context serialization; split data spaces if throughput matters.
-    with psycopg.connect(sync_database_url(), autocommit=True) as lock_conn:
-        for context in contexts:
-            lock_conn.execute(
-                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
-                (context_lock_key(snapshot["org_id"], context),),
-            )
-        monitor.refresh(conn)
-        monitor.start()
-        try:
-            # A bind failure raises from engine store.create(), before any model call.
-            result = asyncio.run(_call_engine(service, data, reset, monitor))
-        finally:
-            monitor.stop.set()
-            monitor.join(5)
+    # Started before the context lock, so a viewer of a waiting job sees the relay alive.
+    # Its failures stay inside the relay thread: they never reach the engine or this job.
+    relay = live.LiveRelay(job_id, sync_database_url(), enabled=live.live_enabled())
+    relay.start()
+    try:
+        # Jobs sharing a synthetic account/data set run one at a time. A matrix job holds
+        # every context it may use, taken in sorted order so two matrix jobs can't deadlock.
+        # ponytail: per-context serialization; split data spaces if throughput matters.
+        with psycopg.connect(sync_database_url(), autocommit=True) as lock_conn:
+            for context in contexts:
+                lock_conn.execute(
+                    "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                    (context_lock_key(snapshot["org_id"], context),),
+                )
+            monitor.refresh(conn)
+            monitor.start()
+            try:
+                # A bind failure raises from engine store.create(), before any model call.
+                result = asyncio.run(_call_engine(service, data, reset, monitor, relay))
+            finally:
+                monitor.stop.set()
+                monitor.join(5)
+    finally:
+        relay.close()  # final drain: the engine's last `end` reaches viewers
     persisted = persist_result(
         conn,
         job_id,

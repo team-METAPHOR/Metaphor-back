@@ -17,7 +17,7 @@ from threading import Event
 import psycopg
 
 from app.core.config import get_settings
-from app.worker import queue
+from app.worker import live, queue
 
 logger = logging.getLogger(__name__)
 KILL_GRACE_SECONDS = 3
@@ -84,6 +84,8 @@ def supervise(
         _kill_group(process)
     if queue.abandon(conn, job_id, code, cancel_code="CANCEL_FORCED"):
         logger.warning("job %s closed by supervisor: %s (exit %s)", job_id, code, process.exitcode)
+    # A killed child never sent the engine `end`: drop its preview so nothing stays "live".
+    live.safe_delete(conn, job_id)
     return process
 
 
@@ -97,6 +99,10 @@ def run_forever(
     with psycopg.connect(sync_database_url(), autocommit=True) as conn:
         while not stop_event.is_set():
             queue.reap_expired(conn)
+            try:
+                live.sweep(conn)
+            except psycopg.Error as error:
+                logger.warning("LIVE_RELAY_SWEEP_FAILED: %s", type(error).__name__)
             job_id = queue.claim_next(conn, worker_id, lease_seconds=settings.lease_seconds)
             if job_id is None:
                 stop_event.wait(idle_seconds)

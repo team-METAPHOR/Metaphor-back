@@ -12,13 +12,17 @@ from app.core.hashing import lookup_hash
 from app.core.ids import new_id
 from app.models import AuditEvent, Session, User
 from app.repositories import users as repo
-from app.services.audit import record_audit
+from app.services.audit import count_actions, record_audit
 from app.services.limits import enforce_rate_limit, lock_key, since
 
 SESSION_TTL = timedelta(days=14)
 LOGIN_FAILED = "auth.login_failed"
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW = {"minutes": 15}
+PASSWORD_CHANGE = "auth.password_change"
+PASSWORD_CHANGE_FAILED = "auth.password_change_failed"
+PASSWORD_CHANGE_MAX_FAILURES = 5
+PASSWORD_CHANGE_WINDOW = {"hours": 1}
 SIGNUP = "auth.signup"
 SIGNUP_HOURLY_LIMIT = 5
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
@@ -131,16 +135,32 @@ async def login(db: AsyncSession, email: str, password: str) -> tuple[User, str]
 
 
 async def change_password(db: AsyncSession, user_id: str, current: str, new: str) -> None:
-    """Verify the current password, store the new hash and revoke every session."""
+    """Verify the current password, store the new hash and revoke every session.
+
+    5 wrong current passwords per user per hour block further attempts (429), counted from
+    audit_events under a per-user advisory lock so the count-then-record is atomic.
+    """
     new_hash = await asyncio.to_thread(hash_password, new)
     async with db.begin():
+        await lock_key(db, f"password_change:{user_id}")
+        await enforce_rate_limit(
+            db,
+            count_actions(user_id, (PASSWORD_CHANGE_FAILED,), since(**PASSWORD_CHANGE_WINDOW)),
+            limit=PASSWORD_CHANGE_MAX_FAILURES,
+            code="PASSWORD_CHANGE_THROTTLED",
+            message="비밀번호 변경 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+        )
         user = await db.get(User, user_id)
-        if user is None or not await asyncio.to_thread(
+        if user is not None and await asyncio.to_thread(
             verify_password, current, user.password_hash
         ):
-            raise ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password")
-        user.password_hash = new_hash
-        await revoke_user_sessions(db, user_id)
+            user.password_hash = new_hash
+            await revoke_user_sessions(db, user_id)
+            await record_audit(db, actor_id=user_id, org_id=None, action=PASSWORD_CHANGE)
+            return
+        # Recorded in this transaction, which commits on block exit; raise only after that.
+        await record_audit(db, actor_id=user_id, org_id=None, action=PASSWORD_CHANGE_FAILED)
+    raise ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password")
 
 
 async def logout(db: AsyncSession, token: str) -> None:

@@ -4,7 +4,7 @@
 `app/services/reports.py`, `app/worker/persist.py`이고, 문서와 코드가 다르면 코드를 따릅니다.
 
 - 경로는 모두 `/api/v1` 아래에 있습니다. 로그인 쿠키(`sid`)가 필요하고, 쓰기 요청은 허용된 `Origin`이어야 합니다(CSRF).
-- 제보가 속한 회사의 구성원이 아니면 **404 `NOT_FOUND`**, 구성원이지만 권한이 모자라면 **403 `FORBIDDEN`** 입니다.
+- 제보가 속한 회사의 구성원이 아니면 **404 `NOT_FOUND`**, 구성원이지만 권한이 모자라면 **403 `FORBIDDEN`** 입니다. `viewer`는 조회만 할 수 있고 제보 등록·상태 변경·담당자 지정이 모두 403입니다.
 - 오류 응답은 공통 형식 `{"error": {"code", "message", "request_id"}}`입니다.
 
 ## 대시보드 5단계
@@ -52,7 +52,7 @@
 | `dismissed` | 버그 아님·중복으로 종료 | 사람 |
 | `closed` | 마감 | 사람 (수정 확인된 제보만) |
 
-`PATCH /reports/{id}/workflow {status}` — reviewer, admin — 200 제보 상세
+`PATCH /reports/{id}/workflow {status}` — developer, admin — 200 제보 상세
 
 - `status`는 `received` / `fixing` / `dismissed` / `closed` 중 하나입니다. 그 밖의 값은 422 `VALIDATION_FAILED`입니다.
 - `closed`는 그 순간 `fix_verified`가 `true`일 때만 됩니다. 아니면 409 `FIX_NOT_VERIFIED`입니다. 마감하면 `closed_at`을 기록합니다.
@@ -67,7 +67,7 @@
 
 ## 담당자 (`assignee`)
 
-- `PATCH /reports/{id}/assignee {user_id}` (reviewer, admin) → 200 제보 상세. `null`이면 해제합니다. 감사 로그 `report.assign` `{from, to}`.
+- `PATCH /reports/{id}/assignee {user_id}` (developer, admin) → 200 제보 상세. `null`이면 해제합니다. 감사 로그 `report.assign` `{from, to}`.
 - 담당자는 제보 회사의 활성 구성원이어야 하며, 아니면 422 `ASSIGNEE_NOT_MEMBER`입니다(사용자 없음과 비구성원의 메시지가 같음).
 - 응답: `assignee: {id, display_name, email, active} | null`.
 - 담당자가 비활성화되거나 회사를 나가도 배정은 풀리지 않습니다(연쇄 해제 없음). 대신 `active: false`가 되고 `display_name`·`email`은 `null`로 가립니다.

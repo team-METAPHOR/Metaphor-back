@@ -16,8 +16,8 @@ Metaphor is a screenshot-driven web QA service.
   report with an AI model, plans steps, reproduces the bug twice in fresh Playwright browser
   contexts inside the customer's **approved test scope**, and writes a verdict
   (`reproduced` / `not_reproduced` / `inconclusive`), evidence, and a Korean report.
-- Customer developers and reviewers read results, answer follow-up questions (`resume`), and
-  re-verify a fix with the same stored plan (`retest`).
+- Customer org members read results; developers and admins answer follow-up questions
+  (`resume`) and re-verify a fix with the same stored plan (`retest`).
 
 Out of scope: editing customer source code, applying patches, opening PRs, email/Slack
 notifications, external issue creation.
@@ -99,7 +99,10 @@ tests/                     pytest suites (tests/e2e needs a real model key)
 - Every report creation goes through the shared `create_report` service (platform and widget).
 - Cross-org access returns **404**, not 403, so existence is not leaked.
 - Programs, platform report submission, reports, jobs and evidence are for active members of
-  the owner org only. Roles then gate writes (e.g. answer/rerun/cancel: reviewer or admin).
+  the owner org only. Roles then gate writes: `admin` (org, members, invites, programs/scope,
+  widget, origin verification) ⊃ `developer` (file reports, rerun/retest, answer, cancel,
+  workflow, assignee) ⊃ `viewer` (read only; every write is 403). Role tuples live only in
+  `app/services/access.py` (`READ_ROLES`, `WRITE_ROLES`, `ADMIN_ROLES`).
 - Anonymous widget reporters can never read results, jobs, evidence, or other reports.
 - Engine internals (`_baseline`, `_parent`) are never called directly. Use `run/resume/retest`.
 

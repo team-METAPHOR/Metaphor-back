@@ -20,7 +20,7 @@ from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import Assignee, ReportCreated, ReportDetail, ReportItem, ReportList
 from app.schemas.validation_job import JobBrief
-from app.services.access import org_role
+from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.intake import (
@@ -177,9 +177,12 @@ async def submit_report(
 
     async with db.begin():
         program = await programs_repo.get(db, form.program_id)
-        # Any active member of the owning org may file; everyone else gets 404 (cross-org rule).
-        if program is None or await org_role(db, user_id, program.owner_org_id) is None:
+        # Non-members get 404 (cross-org rule); viewers are members but read only (403).
+        role = None if program is None else await org_role(db, user_id, program.owner_org_id)
+        if role is None:
             raise ApiError(404, "NOT_FOUND", "프로그램을 찾을 수 없습니다.")
+        if role not in WRITE_ROLES:
+            raise ApiError(403, "FORBIDDEN", "제보를 등록할 권한이 없습니다.")
         if program.status != "active":
             raise ApiError(422, "PROGRAM_NOT_ACTIVE", "현재 제보를 받지 않는 프로그램입니다.")
 
@@ -364,11 +367,8 @@ async def _detail(db: AsyncSession, report: Report) -> ReportDetail:
     )
 
 
-WORKFLOW_ROLES = ("reviewer", "admin")
-
-
 async def _require_triage_role(db: AsyncSession, user_id: str, report: Report) -> None:
-    if await org_role(db, user_id, report.org_id) not in WORKFLOW_ROLES:
+    if await org_role(db, user_id, report.org_id) not in WRITE_ROLES:
         raise ApiError(403, "FORBIDDEN", "제보 상태를 바꿀 권한이 없습니다.")
 
 

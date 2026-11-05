@@ -15,14 +15,16 @@ async def world(client, db_session):
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
-    _, reviewer_h = await login_as(client, db_session, org, "reviewer")
+    _, viewer_h = await login_as(client, db_session, org, "viewer")
+    _, triager_h = await login_as(client, db_session, org, "developer")
     body = (await submit(client, dev_h, program.id, description="버그 설명")).json()
     return {
         "report_id": body["id"],
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
-        "reviewer_h": reviewer_h,
+        "viewer_h": viewer_h,
+        "triager_h": triager_h,
     }
 
 
@@ -33,7 +35,7 @@ async def set_status(db_session, job_id, status):
 
 
 async def answer(client, world, headers=None, source=None, text="cat은 결과 있음", key=None):
-    headers = dict(headers or world["reviewer_h"])
+    headers = dict(headers or world["triager_h"])
     if key:
         headers["Idempotency-Key"] = key
     return await client.post(
@@ -61,9 +63,9 @@ async def test_answer_creates_resume_job_linked(client, db_session, world):
     assert (row.job_id, row.created_job_id) == (world["job_id"], new_id)
 
 
-async def test_org_reviewer_can_answer_developer_cannot(client, db_session, world):
+async def test_org_developer_can_answer_viewer_cannot(client, db_session, world):
     await set_status(db_session, world["job_id"], "needs_info")
-    denied = await answer(client, world, world["dev_h"])
+    denied = await answer(client, world, world["viewer_h"])
     assert (denied.status_code, denied.json()["error"]["code"]) == (403, "FORBIDDEN")
     ok = await answer(client, world, world["admin_h"])
     assert ok.status_code == 202
@@ -141,7 +143,7 @@ async def test_answers_share_job_request_hourly_limit_429(client, db_session, wo
 
     await set_status(db_session, world["job_id"], "needs_info")
     await seed_job_requests(
-        client, db_session, world["reviewer_h"], JOB_REQUEST_HOURLY_LIMIT, "report.retest"
+        client, db_session, world["triager_h"], JOB_REQUEST_HOURLY_LIMIT, "report.retest"
     )
     response = await answer(client, world)
     assert response.status_code == 429

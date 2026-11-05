@@ -8,7 +8,7 @@ from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision
 from app.repositories import programs as repo
 from app.schemas.program import SCOPE_FIELDS, ProgramCreate, ProgramPatch
-from app.services.access import org_role, require_org_role
+from app.services.access import ADMIN_ROLES, org_role, require_org_role
 from app.services.audit import record_audit
 from app.services.intake import run_policy
 
@@ -72,7 +72,7 @@ def _scope_values(revision: ProgramScopeRevision) -> dict:
 
 async def create_program(db: AsyncSession, user_id: str, body: ProgramCreate):
     async with db.begin():
-        await require_org_role(db, user_id, body.org_id, "admin")
+        await require_org_role(db, user_id, body.org_id, *ADMIN_ROLES)
         program = Program(
             id=new_id(),
             owner_org_id=body.org_id,
@@ -125,7 +125,7 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
         program = await repo.get(db, program_id, for_update=True)
         if program is None:
             raise _not_found()
-        await require_org_role(db, user_id, program.owner_org_id, "admin")
+        await require_org_role(db, user_id, program.owner_org_id, *ADMIN_ROLES)
         revision = await repo.get_revision(db, program)
 
         for field in _PROGRAM_FIELDS:

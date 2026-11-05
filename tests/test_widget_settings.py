@@ -14,7 +14,7 @@ async def world(client, db_session):
     await db_session.commit()
     _, admin = await login_as(client, db_session, org, "admin")
     _, dev = await login_as(client, db_session, org, "developer")
-    _, reviewer = await login_as(client, db_session, org, "reviewer")
+    _, viewer = await login_as(client, db_session, org, "viewer")
     _, outsider = await login_as(client, db_session, other, "admin")
     url = f"/api/v1/programs/{program.id}/widget-settings"
     return {
@@ -22,7 +22,7 @@ async def world(client, db_session):
         "url": url,
         "admin": admin,
         "dev": dev,
-        "reviewer": reviewer,
+        "viewer": viewer,
         "out": outsider,
     }
 
@@ -36,7 +36,7 @@ async def audit_actions(db_session) -> list[str]:
 
 
 async def test_get_defaults_when_missing(client, world):
-    for who in ("admin", "dev", "reviewer"):
+    for who in ("admin", "dev", "viewer"):
         response = await client.get(world["url"], headers=world[who])
         assert response.status_code == 200
         assert response.json() == {
@@ -66,7 +66,7 @@ async def test_admin_enable_issues_key_mpk_prefix(client, world):
 
 
 async def test_developer_patch_403(client, world):
-    for who in ("dev", "reviewer"):
+    for who in ("dev", "viewer"):
         assert (await patch(client, world, who, widget_enabled=True)).status_code == 403
         rotate = await client.post(f"{world['url']}/rotate-key", headers=world[who])
         assert rotate.status_code == 403

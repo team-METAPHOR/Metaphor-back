@@ -1,8 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.models.identity import MEMBERSHIP_ROLES
 from app.repositories import users as repo
 from app.services.auth import revoke_user_sessions
+
+# The single place role tuples live. Every active member may read its org (READ_ROLES).
+READ_ROLES = MEMBERSHIP_ROLES
+WRITE_ROLES = ("admin", "developer")  # reports, jobs, clarifications, triage
+ADMIN_ROLES = ("admin",)  # org, members, invites, programs, widget, origin verification
 
 
 async def org_role(db: AsyncSession, user_id: str, org_id: str) -> str | None:

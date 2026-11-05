@@ -12,13 +12,12 @@ from app.core.errors import ApiError
 from app.core.text import redact
 from app.models import AuditEvent, Program, ProgramScopeRevision, QaResult, Report, ValidationJob
 from app.schemas.report import JobRequest
-from app.services.access import org_role
+from app.services.access import WRITE_ROLES, org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.jobs import create_job, enforce_job_request_limit
 from app.services.reports import load_visible_report
 
-RERUN_ROLES = ("reviewer", "admin")
 COMPARABLE_VERDICTS = ("reproduced", "not_reproduced")
 
 
@@ -61,7 +60,7 @@ async def request_job(
     ).hexdigest()
     async with db.begin():
         report = await load_visible_report(db, user_id, report_id)
-        if await org_role(db, user_id, report.org_id) not in RERUN_ROLES:
+        if await org_role(db, user_id, report.org_id) not in WRITE_ROLES:
             raise ApiError(403, "FORBIDDEN", "재실행 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:

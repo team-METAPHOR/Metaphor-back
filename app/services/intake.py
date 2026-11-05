@@ -9,6 +9,7 @@ from fastapi import UploadFile
 
 from app.core.errors import ApiError
 from app.core.text import redact
+from app.integrations.state_changes import state_change_policy
 from app.models import Program, ProgramScopeRevision
 
 MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
@@ -81,6 +82,7 @@ def run_policy(revision: ProgramScopeRevision) -> RunPolicy:
         excluded_path_prefixes=tuple(revision.excluded_path_prefixes),
         allow_private_targets=revision.allow_private_targets,
         private_cidrs=tuple(revision.private_cidrs),
+        state_changes=state_change_policy(revision.state_changes),
     )
 
 

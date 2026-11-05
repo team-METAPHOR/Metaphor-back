@@ -17,6 +17,7 @@ SCOPE_FIELDS = (
     "test_context_id",
     "mask_selectors",
     "reset_adapter",
+    "state_changes",
 )
 
 # Same limits as the engine's BrowserOptions (core_engine/observation.py): at most 30
@@ -27,12 +28,28 @@ MaskSelector = Annotated[str, Field(min_length=1, max_length=256)]
 AutoFreshRetries = Annotated[int, Field(ge=0, le=2)]
 
 
+WriteMethod = Literal["POST", "PUT", "PATCH", "DELETE"]
+WritePath = Annotated[str, Field(min_length=1, max_length=2048)]
+# Same bound as the engine's StateChangePolicy (at most 32 rules).
+MAX_STATE_CHANGE_RULES = 32
+
+
 class _Strict(BaseModel):
     # Unknown fields are rejected, not ignored. Operator-only revision fields
     # (session_secret_ref, allow_private_targets, private_cidrs) are deliberately absent:
     # a customer admin naming a worker secret could point another org's credentials at
     # their own base_url.
     model_config = ConfigDict(extra="forbid")
+
+
+class StateChanges(_Strict):
+    """Approved writes to disposable test data (engine `StateChangePolicy`). Admin-only."""
+
+    environment: Literal["test", "staging"]
+    reset_adapter_id: str = Field(max_length=64)
+    allowed_requests: list[tuple[WriteMethod, WritePath]] = Field(
+        min_length=1, max_length=MAX_STATE_CHANGE_RULES
+    )
 
 
 class ProgramCreate(_Strict):
@@ -51,6 +68,7 @@ class ProgramCreate(_Strict):
     test_context_id: str = "anonymous"
     mask_selectors: list[MaskSelector] = Field(default=[], max_length=MAX_MASK_SELECTORS)
     reset_adapter: str = Field(default="stateless", max_length=64)
+    state_changes: StateChanges | None = None
 
 
 class ProgramPatch(_Strict):
@@ -68,6 +86,8 @@ class ProgramPatch(_Strict):
     test_context_id: str | None = None
     mask_selectors: list[MaskSelector] | None = Field(default=None, max_length=MAX_MASK_SELECTORS)
     reset_adapter: str | None = Field(default=None, max_length=64)
+    # null turns approved writes off (a new revision, like any scope change).
+    state_changes: StateChanges | None = None
 
 
 class ScopeResponse(BaseModel):
@@ -90,6 +110,8 @@ class ScopeResponse(BaseModel):
     # them fail with CREDENTIALS_REQUIRE_HTTPS until the program is registered on HTTPS.
     credentials_blocked_by_http: bool = False
     reset_adapter: str
+    # Normalized approval (rules sorted), or null when runs are read-only (the default).
+    state_changes: StateChanges | None = None
     created_at: datetime
 
 

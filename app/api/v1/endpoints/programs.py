@@ -49,6 +49,7 @@ def _full(
                 revision, has_test_account
             ),
             reset_adapter=revision.reset_adapter,
+            state_changes=revision.state_changes,
             created_at=revision.created_at,
         ),
     )

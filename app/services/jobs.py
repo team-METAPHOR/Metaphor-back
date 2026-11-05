@@ -38,6 +38,8 @@ def scope_snapshot(program: Program, revision: ProgramScopeRevision) -> dict:
         "mask_selectors": list(revision.mask_selectors),
         "session_secret_ref": revision.session_secret_ref,
         "reset_adapter": revision.reset_adapter,
+        # Admin-approved writes, frozen per job (retest replays its baseline's approval).
+        "state_changes": revision.state_changes,
     }
 
 

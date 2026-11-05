@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import credentials
 from app.core.errors import ApiError
 from app.core.ids import new_id
+from app.integrations.state_changes import state_change_policy
 from app.models import Program, ProgramScopeRevision
 from app.repositories import programs as repo
 from app.repositories import test_accounts as test_accounts_repo
@@ -17,6 +18,13 @@ from app.services.intake import run_policy
 
 # keep in sync with app.worker.resets.RESETS
 ALLOWED_RESET_ADAPTERS = ("stateless",)
+# Registered adapters that really restore server-side test data: the only ones that may back
+# approved writes (`state_changes`). `stateless` never qualifies (the engine refuses it too).
+STATEFUL_RESET_ADAPTERS: tuple[str, ...] = ()
+# Never writable from the worker browser, whatever the approval says: the test-control API
+# (the reset adapter calls it server-side) and account creation.
+RESERVED_WRITE_PREFIXES = ("/api/test",)
+_ACCOUNT_CREATION = re.compile(r"(?:^|/)(?:sign-?up|register)(?:/|$)", re.IGNORECASE)
 _APP_VERSION = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 _PROGRAM_FIELDS = (
     "name",
@@ -44,10 +52,53 @@ def browser_options(revision: ProgramScopeRevision) -> BrowserOptions:
     )
 
 
+def _overlaps(path: str, prefix: str) -> bool:
+    path, prefix = path.rstrip("/") or "/", prefix.rstrip("/") or "/"
+    return any(
+        a == b or a.startswith(b.rstrip("/") + "/") for a, b in ((path, prefix), (prefix, path))
+    )
+
+
+def _check_state_changes(revision: ProgramScopeRevision) -> None:
+    """Backend rules on top of the engine's own checks (run in `run_policy`)."""
+    approval = revision.state_changes
+    if approval["reset_adapter_id"] not in STATEFUL_RESET_ADAPTERS:
+        raise ApiError(
+            422, "STATE_RESET_REQUIRED", "쓰기 승인에는 실제 서버 초기화 어댑터가 필요합니다."
+        )
+    if approval["reset_adapter_id"] != revision.reset_adapter:
+        raise ApiError(
+            422,
+            "STATE_RESET_MISMATCH",
+            "쓰기 승인의 초기화 어댑터와 프로그램 초기화 방식이 같아야 합니다.",
+        )
+    if revision.session_secret_ref is not None:
+        # The reset ends the account's sessions: a fixed operator Cookie would die on every
+        # attempt. Writes use the saved test account (reset → fresh login) instead.
+        raise ApiError(
+            422,
+            "STATE_CHANGES_SESSION_CONFLICT",
+            "운영자 세션이 연결된 범위에는 쓰기를 승인할 수 없습니다. "
+            "테스트 계정 로그인을 사용하세요.",
+        )
+    try:
+        # The engine's own rules first (environment, ≤32 rules, write methods, no `/`).
+        rules = state_change_policy(approval).allowed_requests
+    except PolicyError as error:
+        raise ApiError(422, error.code, "쓰기 승인 설정이 올바르지 않습니다.") from None
+    for _, path in rules:
+        if _ACCOUNT_CREATION.search(path) or any(
+            _overlaps(path, reserved) for reserved in RESERVED_WRITE_PREFIXES
+        ):
+            raise ApiError(422, "STATE_CHANGE_PATH_RESERVED", "쓰기를 승인할 수 없는 경로입니다.")
+
+
 def _validated(revision: ProgramScopeRevision) -> ProgramScopeRevision:
     """Validate with the engine's own types and store its normalized URL/prefixes."""
     if revision.reset_adapter not in ALLOWED_RESET_ADAPTERS:
         raise ApiError(422, "RESET_ADAPTER_UNKNOWN", "지원하지 않는 초기화 방식입니다.")
+    if revision.state_changes is not None:
+        _check_state_changes(revision)
     try:
         policy = run_policy(revision)
     except PolicyError as error:
@@ -63,6 +114,8 @@ def _validated(revision: ProgramScopeRevision) -> ProgramScopeRevision:
     revision.base_url = policy.base_url
     revision.allowed_path_prefixes = list(policy.allowed_path_prefixes)
     revision.excluded_path_prefixes = list(policy.excluded_path_prefixes)
+    if policy.state_changes is not None:
+        revision.state_changes = policy.state_changes.public()
     return revision
 
 
@@ -155,7 +208,7 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
         }
         scope_input = {f: v for f, v in changes.items() if f in SCOPE_FIELDS}
         for field, value in scope_input.items():
-            if value is None and field != "session_secret_ref":
+            if value is None and field not in ("session_secret_ref", "state_changes"):
                 raise ApiError(422, "VALIDATION_FAILED", f"{field} cannot be null")
 
         candidate = None

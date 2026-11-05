@@ -171,7 +171,8 @@
 |---|---|---|
 | `VERIFY_ORIGIN` | 테스트 대상 도메인의 소유 확인이 필요합니다 | 프로그램 현재 범위의 origin이 소유 확인되지 않음(새 작업이 `ORIGIN_NOT_VERIFIED`로 막힘) |
 | `WAIT_FOR_QUOTA` | 오늘 실행 한도에 도달해 한도가 풀리면 다시 시도합니다 | 제보의 `run_blocked == "quota"`(한도 대기로 주차되어 아직 작업이 없음) |
-| `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류) |
+| `TEST_ACCOUNT_REQUIRED` | 테스트 계정을 등록하면 다시 시도합니다 | `SESSION_SECRET_MISSING`, `SESSION_SECRET_INVALID`(워커의 테스트 세션 비밀값 없음·형식 오류), `TEST_ACCOUNT_INVALID`(저장된 계정을 열 수 없음, 다시 저장 필요), `TEST_ACCOUNT_KEY_MISSING`·`TEST_ACCOUNT_KEY_INVALID`(워커 개인키 없음·오류, 운영자 조치) |
+| `CHECK_TEST_ACCOUNT` | 등록된 테스트 계정으로 로그인하지 못했습니다. 계정과 로그인 설정을 확인해 주세요 | `LOGIN_FAILED`(엔진 자동 로그인 실패: 계정 오류, 폼 불일치, 성공 신호 미확인). 작업 `error_code` 또는 재현 시도 근거의 `blocker` |
 | `CHECK_TARGET_URL` | 테스트 대상 URL과 허용 범위를 확인해 주세요 | `ORIGIN_OUT_OF_SCOPE`, `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED`, `INVALID_URL`, `INVALID_HOST`, `DNS_FAILED`, `DESTINATION_BLOCKED`, `PRIVATE_DESTINATION_BLOCKED`, `NAVIGATION_FAILED`(페이지 응답 없음 또는 4xx/5xx) |
 | `ANSWER_QUESTIONS` | 추가 질문에 답하면 다시 검증합니다 | 최신 작업 상태가 `needs_info` |
 | `WAIT_FOR_PROVIDER` | AI 사용량 제한이 풀린 뒤 다시 검증을 요청해 주세요 | `MODEL_RATE_LIMITED`(공급자 429). 작업의 `retry_available_at` 이후 재요청 |

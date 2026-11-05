@@ -282,3 +282,56 @@ async def test_worker_rejects_swapped_row_and_missing_key(
         load_test_account(conn, victim.id)
     assert swapped.value.code == "TEST_ACCOUNT_INVALID"
     assert load_test_account(conn, world["program"].id).password == PASSWORD
+
+
+LOGIN_BODY = {**BODY, "success_path": "/app/home"}
+
+
+@pytest.mark.parametrize(
+    ("body", "revision", "in_use"),
+    [
+        (LOGIN_BODY, {}, True),
+        ({**BODY, "success_selector": "#signed-in"}, {}, True),
+        (BODY, {}, False),  # no success signal: the engine cannot confirm a login
+        (LOGIN_BODY, {"test_context_id": "anonymous"}, False),
+        (LOGIN_BODY, {"session_secret_ref": "shop"}, False),  # operator session wins
+    ],
+)
+async def test_in_use_follows_program_config(client, db_session, body, revision, in_use):
+    world = await seeded(client, db_session, **revision)
+    saved = await client.put(url(world), json=body, headers=world["admin"])
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["in_use"] is in_use
+    assert (await client.get(url(world), headers=world["viewer"])).json()["in_use"] is in_use
+
+
+async def test_login_config_validated(client, db_session):
+    world = await seeded(client, db_session)
+    same = await client.put(
+        url(world), json={**BODY, "success_path": "/login"}, headers=world["admin"]
+    )
+    assert same.status_code == 422 and same.json()["error"]["code"] == "LOGIN_CONFIG_INVALID"
+    out = await client.put(
+        url(world), json={**LOGIN_BODY, "submit_path": "/elsewhere"}, headers=world["admin"]
+    )
+    assert out.status_code == 422 and out.json()["error"]["code"] == "LOGIN_PATH_OUT_OF_SCOPE"
+
+
+async def test_load_login_builds_engine_options(client, db_session, conn, keypair, monkeypatch):
+    from app.worker.test_accounts import load_login
+
+    world = await seeded(client, db_session)
+    monkeypatch.setenv(PRIVATE_KEY_ENV, keypair[0])
+    await client.put(url(world), json=BODY, headers=world["admin"])
+    assert load_login(conn, world["program"].id) is None  # no success signal yet
+    await client.put(
+        url(world), json={**LOGIN_BODY, "submit_path": "/app/auth"}, headers=world["admin"]
+    )
+    login = load_login(conn, world["program"].id)
+    assert (login.login_id, login.password) == (LOGIN_ID, PASSWORD)
+    assert (login.login_path, login.submit_path, login.success_path) == (
+        "/login",
+        "/app/auth",
+        "/app/home",
+    )
+    assert PASSWORD not in repr(login)

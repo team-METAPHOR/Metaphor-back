@@ -1,15 +1,15 @@
 """Open a program's sealed test account in the worker (the only holder of the private key).
 
-ponytail: core_engine 4a710f0 can only send fixed `BrowserOptions.session_headers`; it cannot
-log in with an id/password yet, so runs do not call this. Once the engine has a login step,
-`build_service` (app/worker/runner.py) passes `load_test_account(...)` there, the API's
-`TestAccountResponse.in_use` flips to true, and `TEST_ACCOUNT_*` codes below join
-`report_actions.CODE_ACTIONS` → TEST_ACCOUNT_REQUIRED.
+`load_login` turns it into core_engine 0.4.0 `LoginOptions`, which `build_service` and
+`conditions.build_conditions` (app/worker/) pass to every run whose context signs in
+(`models.test_account.login_applies`). The credentials live only in memory: the engine
+keeps them out of the model, plan, result and evidence, and we never log or store them.
 """
 
 import os
 
 import psycopg
+from core_engine import LoginOptions
 
 from app.core import test_account_crypto as crypto
 from app.worker.runner import JobInputError
@@ -46,4 +46,32 @@ def load_test_account(conn: psycopg.Connection, program_id: str) -> crypto.Crede
     try:
         return crypto.open_sealed(private_key(), program_id, version, sealed)
     except crypto.AccountDecryptError:
+        raise JobInputError("TEST_ACCOUNT_INVALID") from None
+
+
+def load_login(conn: psycopg.Connection, program_id: str) -> LoginOptions | None:
+    """Engine login for the program's account, or None when none is stored or it lacks a
+    login path / success signal (runs then stay anonymous, and the API's `in_use` is false)."""
+    row = conn.execute(
+        "SELECT login_path, submit_path, success_path, success_selector"
+        " FROM program_test_accounts WHERE program_id = %s",
+        (program_id,),
+    ).fetchone()
+    if row is None or not row[0] or not (row[2] or row[3]):
+        return None
+    credentials = load_test_account(conn, program_id)
+    if credentials is None:
+        return None  # deleted in between
+    login_path, submit_path, success_path, success_selector = row
+    try:
+        return LoginOptions(
+            login_path=login_path,
+            login_id=credentials.login_id,
+            password=credentials.password,
+            submit_path=submit_path,
+            success_path=success_path,
+            success_selector=success_selector,
+        )
+    except ValueError:
+        # e.g. a credential embedded in the stored paths; the message is never surfaced.
         raise JobInputError("TEST_ACCOUNT_INVALID") from None

@@ -8,15 +8,20 @@ from app.services import test_accounts as service
 router = APIRouter(prefix="/programs/{program_id}/test-account", tags=["test-account"])
 
 
-def _response(row: ProgramTestAccount | None) -> TestAccountResponse:
+def _response(found: tuple[ProgramTestAccount | None, bool]) -> TestAccountResponse:
+    row, in_use = found
     if row is None:
         return TestAccountResponse(
             configured=False, login_id_masked=None, login_path=None, updated_at=None
         )
     return TestAccountResponse(
         configured=True,
+        in_use=in_use,
         login_id_masked=row.login_id_masked,
         login_path=row.login_path,
+        submit_path=row.submit_path,
+        success_path=row.success_path,
+        success_selector=row.success_selector,
         updated_at=row.updated_at,
     )
 

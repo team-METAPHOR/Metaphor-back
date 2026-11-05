@@ -1,6 +1,7 @@
 # 테스트 계정 API
 
 로그인이 필요한 화면을 검증하려고 프로그램마다 테스트 계정(로그인 아이디 + 비밀번호)을 하나 저장합니다.
+워커는 엔진(core_engine 0.4.0, e396348)의 폼 로그인으로 탐색과 두 번의 재현 시도 직전에 매번 새로 로그인합니다.
 쿠키 세션 API이므로 쓰기 요청에는 허용된 `Origin`이 필요합니다(CSRF).
 
 | 메서드 | 경로 | 권한 |
@@ -14,13 +15,19 @@
 ## 저장·교체 `PUT`
 
 ```json
-{"login_id": "qa-tester@metaphor.kr", "password": "…", "login_path": "/login"}
+{"login_id": "qa-tester@metaphor.kr", "password": "…", "login_path": "/login",
+ "submit_path": "/api/auth", "success_path": "/app/home", "success_selector": null}
 ```
 
 - `login_id` 1~254자, `password` 1~256자. 정의되지 않은 필드는 거부합니다.
 - `login_path`(선택): `/`로 시작하는 경로. 쿼리(`?`)·프래그먼트(`#`)·`//`·백슬래시·공백은 허용하지 않습니다.
   현재 승인 범위의 `allowed_path_prefixes` 안에 있고 `excluded_path_prefixes`에 걸리지 않아야 합니다.
   범위를 벗어나면 422 `LOGIN_PATH_OUT_OF_SCOPE`(`detail.reason`: `PATH_OUT_OF_SCOPE`, `PATH_EXCLUDED` 등)입니다.
+- `submit_path`(선택): 로그인 폼이 POST하는 경로. 생략하면 `login_path`로 제출합니다. 형식·범위 규칙은 `login_path`와 같습니다.
+- `success_path`(선택): 로그인 성공 후 도착하는 경로. 형식·범위 규칙은 `login_path`와 같고, `login_path`와 같으면 422 `LOGIN_CONFIG_INVALID`입니다.
+- `success_selector`(선택, 1~256자): 로그인 성공 후에만 보이는 CSS 선택자(예: `#signed-in`). 로그인 화면에 이미 보이는 요소면 엔진이 실패로 처리합니다.
+- 엔진은 클릭만으로 로그인 성공을 추정하지 않습니다. `success_path`나 `success_selector` 중 하나 이상이 있어야 실행에 쓰입니다(둘 다 있으면 둘 다 확인).
+- 아이디·비밀번호 입력란과 제출 버튼은 엔진 기본 선택자(`input[autocomplete="username"]`·`input[type="email"]`·`input[name="username"]`, `input[type="password"]`, `button[type="submit"]` 등)로 찾습니다. MFA·CAPTCHA·외부 SSO·다단계 로그인은 지원하지 않습니다.
 - 형식 오류는 422 `VALIDATION_FAILED`이며, 입력값(비밀번호 포함)은 응답에 절대 다시 담지 않습니다.
 - 서버에 `TEST_ACCOUNT_PUBLIC_KEY`가 없거나 잘못되면 503 `TEST_ACCOUNT_UNAVAILABLE`입니다.
 - 저장·삭제를 합쳐 프로그램당 시간당 10회까지 가능하며, 넘으면 429 `TEST_ACCOUNT_RATE_LIMITED`입니다.
@@ -29,21 +36,35 @@
 ## 상태 조회 `GET` (PUT 응답도 같은 형태)
 
 ```json
-{"configured": true, "in_use": false, "login_id_masked": "qa-***@metaphor.kr",
- "login_path": "/login", "updated_at": "2026-11-05T07:31:50Z"}
+{"configured": true, "in_use": true, "login_id_masked": "qa-***@metaphor.kr",
+ "login_path": "/login", "submit_path": "/api/auth", "success_path": "/app/home",
+ "success_selector": null, "updated_at": "2026-11-05T07:31:50Z"}
 ```
 
 비밀번호와 전체 로그인 아이디는 어떤 응답에도 포함하지 않습니다. 저장된 계정이 없으면 `configured: false`이고 나머지는 `null`입니다.
 
 - `configured`: 계정이 저장되어 있음.
-- `in_use`: 검증 실행에 실제로 쓰이고 있음. 현재 엔진(core_engine 4a710f0)은 아이디·비밀번호 로그인을 지원하지 않아 **항상 `false`** 입니다.
-  화면에서는 "저장됨(아직 실행에 적용 전)"으로 보여 주세요.
+- `in_use`: 현재 프로그램 설정으로 검증 실행이 이 계정으로 로그인함. 다음을 모두 만족하면 `true`입니다.
+  - `login_path`와 성공 신호(`success_path` 또는 `success_selector`)가 저장되어 있음
+  - 현재 승인 범위의 `test_context_id`가 `anonymous`가 아님(엔진은 계정·역할·데이터 조건을 식별하는 명시적 컨텍스트를 요구합니다)
+  - 운영자가 연결한 세션(`has_session`의 운영자 세션)이 없음. 엔진은 고정 세션 헤더와 폼 로그인을 함께 쓰지 않으므로 운영자 세션이 우선합니다
+  `false`이면 화면에서 "저장됨(실행에 적용 안 됨)"으로 보여 주고, 위 조건 중 빠진 것을 안내해 주세요. 조건 매트릭스 작업은 조건마다 같은 규칙(조건의 `test_context_id`)을 따릅니다.
 
 프로그램 응답의 `scope.has_test_account`는 계정 저장 여부이고, `scope.has_session`은 운영자가 연결한 세션이 있거나 테스트 계정이 저장되어 있으면 `true`입니다.
 
 ## 삭제 `DELETE`
 
 204를 반환합니다. 저장된 계정이 없어도 204입니다(감사 로그는 실제로 지웠을 때만 `program.test_account_delete`).
+
+## 실행 중 동작
+
+- 워커는 실행 시점의 현재 계정을 복호화해 메모리에서만 엔진에 넘깁니다. 비밀번호와 로그인 아이디는 모델 입력·계획·결과(`qa_results`)·이벤트·근거 파일·로그 어디에도 남지 않습니다. 엔진은 로그인 화면의 스크린샷·영상·콘솔·네트워크 기록을 수집하지 않고, 이후 화면에 계정 문자열이 보이면 마스킹합니다.
+- 결과의 `environment.session_mode`는 `form_login`, `login_profile_sha256`는 비밀을 뺀 경로·선택자 설정의 해시입니다. 로그인 설정이나 `test_context_id`를 바꾸면 기존 결과의 재검증(`retest`)은 `BASELINE_ENVIRONMENT_MISMATCH`로 보류되니 새 검증을 요청하세요. 비밀번호만 바꾸면 재검증에 영향이 없습니다.
+- 실패 코드
+  - `LOGIN_FAILED`(엔진): 계정 오류, 폼 불일치, 성공 신호 미확인. 판정은 `inconclusive`이며 `required_actions`에 `CHECK_TEST_ACCOUNT`가 붙습니다.
+  - `TEST_ACCOUNT_INVALID`(워커): 저장된 계정을 열 수 없음(키 교체 등). 다시 저장해야 하며 `required_actions`는 `TEST_ACCOUNT_REQUIRED`입니다.
+  - `TEST_ACCOUNT_KEY_MISSING`·`TEST_ACCOUNT_KEY_INVALID`(워커): 워커에 개인키가 없거나 잘못됨. 운영자 조치가 필요하며 `required_actions`는 `TEST_ACCOUNT_REQUIRED`입니다.
+  - 로그인 경로가 범위를 벗어나면(저장 후 범위가 바뀐 경우) `PATH_OUT_OF_SCOPE` 등 → `CHECK_TARGET_URL`.
 
 ## 보관 방식
 

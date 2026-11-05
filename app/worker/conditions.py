@@ -9,6 +9,8 @@ from pathlib import Path
 import psycopg
 from core_engine import BrowserOptions, ConditionsResult, PolicyError, TestCondition
 
+from app.models.test_account import login_applies
+
 SCHEMA = "conditions-1"
 # Engine matrix verdict → job verdict (a backend condition retest already uses job verdicts).
 MATRIX_VERDICTS = {
@@ -22,8 +24,9 @@ _VERDICTS = ("reproduced", "not_reproduced", "inconclusive")
 _STATUSES = ("needs_info", "completed", "inconclusive", "failed", "cancelled", "not_run")
 
 
-def build_conditions(snapshot: dict, app_version: str | None, load_headers) -> tuple:
-    """Trusted engine conditions. Session headers come from the worker env (by reference)."""
+def build_conditions(snapshot: dict, app_version: str | None, load_headers, login=None) -> tuple:
+    """Trusted engine conditions. Session headers come from the worker env (by reference);
+    `login` (the saved test account) applies to each condition whose context signs in."""
     return tuple(
         TestCondition(
             id=c["condition_id"],
@@ -39,6 +42,9 @@ def build_conditions(snapshot: dict, app_version: str | None, load_headers) -> t
                 # The operator switch (QA_VIDEO_ENABLED) gates every condition's video too.
                 record_video=c["record_video"] and video_enabled(),
                 response_delay_ms=c["response_delay_ms"],
+                login=login
+                if login_applies(c["test_context_id"], c.get("session_secret_ref"))
+                else None,
             ),
         )
         for c in snapshot["conditions"]

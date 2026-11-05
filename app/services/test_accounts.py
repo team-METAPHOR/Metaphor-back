@@ -12,6 +12,7 @@ from app.core import test_account_crypto as crypto
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.models import AuditEvent, ProgramTestAccount
+from app.models.test_account import login_applies
 from app.repositories import programs as programs_repo
 from app.repositories import test_accounts as repo
 from app.schemas.test_account import TestAccountPut
@@ -83,10 +84,22 @@ def _check_login_path(revision, login_path: str) -> None:
         ) from None
 
 
-async def get_account(db: AsyncSession, user_id: str, program_id: str) -> ProgramTestAccount | None:
+def _in_use(row: ProgramTestAccount | None, revision) -> bool:
+    return (
+        row is not None
+        and row.login_ready
+        and login_applies(revision.test_context_id, revision.session_secret_ref)
+    )
+
+
+async def get_account(
+    db: AsyncSession, user_id: str, program_id: str
+) -> tuple[ProgramTestAccount | None, bool]:
+    """The stored row and whether runs on the current scope sign in with it."""
     async with db.begin():
-        await _program(db, user_id, program_id, *READ_ROLES)
-        return await repo.get(db, program_id)
+        program = await _program(db, user_id, program_id, *READ_ROLES)
+        row = await repo.get(db, program_id)
+        return row, _in_use(row, await programs_repo.get_revision(db, program))
 
 
 async def is_configured(db: AsyncSession, program_id: str) -> bool:
@@ -97,13 +110,19 @@ async def is_configured(db: AsyncSession, program_id: str) -> bool:
 
 async def put_account(
     db: AsyncSession, user_id: str, program_id: str, body: TestAccountPut
-) -> ProgramTestAccount:
+) -> tuple[ProgramTestAccount, bool]:
     async with db.begin():
         program = await _program(db, user_id, program_id, *ADMIN_ROLES)
         public_key = _public_key()
         await _limit_writes(db, program.id)
-        if body.login_path is not None:
-            _check_login_path(await programs_repo.get_revision(db, program), body.login_path)
+        revision = await programs_repo.get_revision(db, program)
+        for path in (body.login_path, body.submit_path, body.success_path):
+            if path is not None:
+                _check_login_path(revision, path)
+        if body.success_path is not None and body.success_path == body.login_path:
+            raise ApiError(
+                422, "LOGIN_CONFIG_INVALID", "로그인 성공 경로는 로그인 경로와 달라야 합니다."
+            )
         login_id = body.login_id.get_secret_value()
         row = await repo.get(db, program.id, for_update=True)
         version = 1 if row is None else row.version + 1
@@ -120,6 +139,9 @@ async def put_account(
             "ciphertext": sealed.ciphertext,
             "login_id_masked": mask_login_id(login_id),
             "login_path": body.login_path,
+            "submit_path": body.submit_path,
+            "success_path": body.success_path,
+            "success_selector": body.success_selector,
             "updated_by": user_id,
         }
         if row is None:
@@ -138,7 +160,7 @@ async def put_account(
         )
         await db.flush()
         await db.refresh(row)
-    return row
+    return row, _in_use(row, revision)
 
 
 async def delete_account(db: AsyncSession, user_id: str, program_id: str) -> None:

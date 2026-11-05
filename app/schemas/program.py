@@ -84,7 +84,7 @@ class ScopeResponse(BaseModel):
     # A login is available for runs: an operator-provisioned session or a saved test account.
     has_session: bool
     # A test account is saved (GET /programs/{id}/test-account has the details; its `in_use`
-    # tells whether runs apply it yet).
+    # tells whether runs on the current scope sign in with it).
     has_test_account: bool = False
     reset_adapter: str
     created_at: datetime

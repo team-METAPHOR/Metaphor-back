@@ -13,6 +13,9 @@ class TestAccountPut(BaseModel):
     login_id: SecretStr = Field(min_length=1, max_length=254)
     password: SecretStr = Field(min_length=1, max_length=256)
     login_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
+    submit_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
+    success_path: str | None = Field(default=None, max_length=2048, pattern=LOGIN_PATH_PATTERN)
+    success_selector: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class TestAccountResponse(BaseModel):
@@ -20,9 +23,12 @@ class TestAccountResponse(BaseModel):
 
     __test__ = False
     configured: bool
-    # False until the engine can log in with id/password: a saved account is not yet applied
-    # to runs (only an operator-provisioned session is). See docs/api/onboarding.md.
+    # Runs sign in with it: login path + success signal saved, and the current scope has a
+    # non-anonymous test_context_id and no operator session (models.test_account.login_applies).
     in_use: bool = False
     login_id_masked: str | None
     login_path: str | None
+    submit_path: str | None = None
+    success_path: str | None = None
+    success_selector: str | None = None
     updated_at: datetime | None

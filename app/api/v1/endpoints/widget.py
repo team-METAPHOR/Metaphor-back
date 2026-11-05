@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Form, Header, Query, Request, Response, Upl
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import DbSession
+from app.core.client_ip import client_ip
 from app.core.errors import ApiError
 from app.core.widget_cors import PREFLIGHT_HEADERS
 from app.schemas.widget import WidgetConfig, WidgetReceipt
@@ -66,7 +67,7 @@ async def widget_report(
         db,
         project_key=project_key,
         origin=origin,
-        client_ip=request.client.host if request.client else "",
+        client_ip=client_ip(request),
         raw_payload=payload,
         image=image,
         idempotency_key=idempotency_key,

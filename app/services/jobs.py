@@ -10,6 +10,12 @@ from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision, Report, ValidationJob
 from app.models.validation_job import JOB_KINDS
+from app.services.audit import count_actions
+from app.services.limits import enforce_rate_limit, lock_key, since
+
+# Customer-requested jobs (fresh/retest/clarification answers) per user per hour, combined.
+JOB_REQUEST_HOURLY_LIMIT = 30
+JOB_REQUEST_ACTIONS = ("report.fresh", "report.retest", "report.clarify")
 
 
 def scope_snapshot(program: Program, revision: ProgramScopeRevision) -> dict:
@@ -31,6 +37,17 @@ def scope_snapshot(program: Program, revision: ProgramScopeRevision) -> dict:
         "session_secret_ref": revision.session_secret_ref,
         "reset_adapter": revision.reset_adapter,
     }
+
+
+async def enforce_job_request_limit(session: AsyncSession, user_id: str) -> None:
+    """429 JOB_RATE_LIMITED; counts the audit rows written by rerun and clarifications."""
+    await lock_key(session, f"job-requests:{user_id}")
+    await enforce_rate_limit(
+        session,
+        count_actions(user_id, JOB_REQUEST_ACTIONS, since(hours=1)),
+        limit=JOB_REQUEST_HOURLY_LIMIT,
+        code="JOB_RATE_LIMITED",
+    )
 
 
 async def create_job(

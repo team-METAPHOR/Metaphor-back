@@ -206,3 +206,21 @@ async def test_worker_retest_calls_engine_with_baseline(
     job = await db_session.get(ValidationJob, job_id, populate_existing=True)
     assert job.status == "completed"
     assert (await db_session.scalars(select(ValidationJob))).all()
+
+
+async def seed_job_requests(client, db_session, headers, n, action="report.fresh"):
+    from app.models import AuditEvent
+
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    db_session.add_all(AuditEvent(actor_id=me["id"], action=action) for _ in range(n))
+    await db_session.commit()
+
+
+async def test_rerun_per_user_hourly_limit_429(client, db_session, world):
+    from app.services.jobs import JOB_REQUEST_HOURLY_LIMIT
+
+    await finish(db_session, world["job_id"])
+    await seed_job_requests(client, db_session, world["admin_h"], JOB_REQUEST_HOURLY_LIMIT)
+    response = await request(client, world, {"mode": "fresh"})
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "JOB_RATE_LIMITED"

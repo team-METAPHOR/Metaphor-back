@@ -13,7 +13,7 @@ from app.models import Clarification, Program, ValidationJob
 from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
-from app.services.jobs import create_job
+from app.services.jobs import create_job, enforce_job_request_limit
 from app.services.reports import load_visible_report
 
 # Must match core_engine QAService.resume, which appends this to the stored description.
@@ -41,6 +41,7 @@ async def answer_question(
             raise ApiError(403, "FORBIDDEN", "추가 답변 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
+            await enforce_job_request_limit(db, user_id)
             source = await db.get(ValidationJob, source_job_id)
             if source is None or source.report_id != report.id:
                 raise ApiError(404, "NOT_FOUND", "검증 작업을 찾을 수 없습니다.")

@@ -1,10 +1,10 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select, update
 
-from app.models import QaResult, Report, ValidationJob
+from app.models import QaResult, Report, User, ValidationJob
 from app.models.validation_job import JobEvent
 from tests.factories import login_as, make_org, make_program
 from tests.test_core_intake import png
@@ -320,3 +320,24 @@ async def test_scrubbed_report_cannot_be_rerun(client, db_session, world):
     )
     assert (response.status_code, response.json()["error"]["code"]) == (410, "REPORT_EXPIRED")
     assert await count(db_session, ValidationJob) == 1
+
+
+async def test_platform_reports_per_user_hourly_limit_429(client, db_session, world):
+    from app.services.reports import REPORT_HOURLY_LIMIT
+    from tests.factories import make_report
+
+    me = (await client.get("/api/v1/auth/me", headers=world["reporter_h"])).json()
+    author = await db_session.get(User, me["id"])
+    for _ in range(REPORT_HOURLY_LIMIT):
+        await make_report(db_session, world["org"], world["program"], author)
+    await db_session.commit()
+    response = await submit(client, world["reporter_h"], world["program"].id, description="b")
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "REPORT_RATE_LIMITED"
+    # Older reports fall out of the window; other users are unaffected.
+    await db_session.execute(
+        update(Report).values(created_at=datetime.now(UTC) - timedelta(hours=2))
+    )
+    await db_session.commit()
+    again = await submit(client, world["reporter_h"], world["program"].id, description="b")
+    assert again.status_code == 201, again.text

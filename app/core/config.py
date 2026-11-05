@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["http://localhost:3000"]
     # HMAC key for widget client IPs (raw IPs are never stored). Unset → widget reports 503.
     ip_hash_secret: str = Field(default="", repr=False)
+    # Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is trusted for the client IP.
+    trusted_proxies: list[str] = []
     lease_seconds: int = 30
     # Engine QA limit (180s) plus cleanup headroom.
     worker_hard_deadline_seconds: int = 210

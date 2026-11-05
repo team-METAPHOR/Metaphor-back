@@ -28,7 +28,10 @@ from app.services.intake import (
     prepare_screenshot,
 )
 from app.services.jobs import create_job
+from app.services.limits import enforce_rate_limit, lock_key, since
 
+# Platform reports per user per hour (widget reports have their own limits).
+REPORT_HOURLY_LIMIT = 20
 TEXT_LIMITS = {"title": 200, "description": 8000, "expected_result": 2000, "test_data": 2000}
 
 
@@ -154,6 +157,13 @@ async def submit_report(
             raise ApiError(403, "SUBMISSION_FORBIDDEN", "이 프로그램에 제보할 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
+            await lock_key(db, f"reports:{user_id}")
+            await enforce_rate_limit(
+                db,
+                reports_repo.count_by_author(user_id, since(hours=1)),
+                limit=REPORT_HOURLY_LIMIT,
+                code="REPORT_RATE_LIMITED",
+            )
             report, job = await create_report(
                 db,
                 ReportSubmission(

@@ -134,3 +134,16 @@ async def test_answer_on_scrubbed_report_410(client, db_session, world):
     assert (response.status_code, response.json()["error"]["code"]) == (410, "REPORT_EXPIRED")
     assert await db_session.scalar(select(func.count()).select_from(Clarification)) == 0
     assert await db_session.scalar(select(func.count()).select_from(ValidationJob)) == 1
+
+
+async def test_answers_share_job_request_hourly_limit_429(client, db_session, world):
+    from app.services.jobs import JOB_REQUEST_HOURLY_LIMIT
+    from tests.test_rerun import seed_job_requests
+
+    await set_status(db_session, world["job_id"], "needs_info")
+    await seed_job_requests(
+        client, db_session, world["reporter_h"], JOB_REQUEST_HOURLY_LIMIT, "report.retest"
+    )
+    response = await answer(client, world)
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "JOB_RATE_LIMITED"

@@ -152,7 +152,7 @@ def persist_result(
             data = redact_file(path)
             conn.execute(
                 "INSERT INTO artifacts (id, org_id, report_id, job_id, kind, storage_key, sha256, "
-                "size, visibility, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'org', %s)",
+                "size, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     new_id(),
                     org_id,

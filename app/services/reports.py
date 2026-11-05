@@ -18,7 +18,7 @@ from app.repositories import programs as programs_repo
 from app.repositories import reports as reports_repo
 from app.schemas.report import ReportCreated, ReportDetail, ReportItem, ReportList
 from app.schemas.validation_job import JobBrief
-from app.services.access import can_submit, org_role
+from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.idempotency import run_once
 from app.services.intake import (
@@ -91,7 +91,6 @@ async def create_report(
                 storage_key=storage.relative_key(written),
                 sha256=shot.sha256,
                 size=len(shot.data),
-                visibility="reporter" if sub.source == "platform" else "org",
                 expires_at=datetime.now(UTC) + timedelta(days=program.retention_days),
             )
             session.add(artifact)
@@ -149,12 +148,11 @@ async def submit_report(
 
     async with db.begin():
         program = await programs_repo.get(db, form.program_id)
-        if program is None:
+        # Any active member of the owning org may file; everyone else gets 404 (cross-org rule).
+        if program is None or await org_role(db, user_id, program.owner_org_id) is None:
             raise ApiError(404, "NOT_FOUND", "프로그램을 찾을 수 없습니다.")
         if program.status != "active":
             raise ApiError(422, "PROGRAM_NOT_ACTIVE", "현재 제보를 받지 않는 프로그램입니다.")
-        if not await can_submit(db, user_id, program):
-            raise ApiError(403, "SUBMISSION_FORBIDDEN", "이 프로그램에 제보할 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:
             await lock_key(db, f"reports:{user_id}")
@@ -198,31 +196,21 @@ async def submit_report(
         )
 
 
-async def report_access(db: AsyncSession, user_id: str, report: Report) -> str | None:
-    """'org' for active org members, 'author' for the platform reporter, else None."""
-    if await org_role(db, user_id, report.org_id):
-        return "org"
-    if report.author_id is not None and report.author_id == user_id:
-        return "author"
-    return None
-
-
-async def load_visible_report(db: AsyncSession, user_id: str, report_id: str):
+async def load_visible_report(db: AsyncSession, user_id: str, report_id: str) -> Report:
+    """The report, for active members of its org only; 404 for everyone else."""
     report = await reports_repo.get(db, report_id)
-    access = await report_access(db, user_id, report) if report else None
-    if access is None:
+    if report is None or await org_role(db, user_id, report.org_id) is None:
         raise ApiError(404, "NOT_FOUND", "제보를 찾을 수 없습니다.")
-    return report, access
+    return report
 
 
-def _brief(job: ValidationJob | None, access: str = "org") -> JobBrief | None:
+def _brief(job: ValidationJob | None) -> JobBrief | None:
     if job is None:
         return None
-    verdict = job.verdict if access == "org" else None
-    return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=verdict)
+    return JobBrief(id=job.id, kind=job.kind, status=job.status, verdict=job.verdict)
 
 
-def _item(report: Report, job: ValidationJob | None, access: str = "org") -> dict:
+def _item(report: Report, job: ValidationJob | None) -> dict:
     return {
         "id": report.id,
         "program_id": report.program_id,
@@ -232,7 +220,7 @@ def _item(report: Report, job: ValidationJob | None, access: str = "org") -> dic
         "origin_kind": report.origin_kind,
         "duplicate_count": report.duplicate_count,
         "workflow_status": report.workflow_status,
-        "latest_job": _brief(job, access),
+        "latest_job": _brief(job),
         "created_at": report.created_at,
     }
 
@@ -251,28 +239,27 @@ async def list_reports(
         rows = await reports_repo.list_visible(
             db, user_id, limit=limit, cursor=position, source=source, program_id=program_id
         )
-        org_ids = set((await db.scalars(reports_repo.member_org_ids(user_id))).all())
     page = rows[:limit]
     next_cursor = None
     if len(rows) > limit:
         last = page[-1][0]
         next_cursor = encode_cursor(last.created_at, last.id)
-    items = [ReportItem(**_item(r, j, "org" if r.org_id in org_ids else "author")) for r, j in page]
+    items = [ReportItem(**_item(r, j)) for r, j in page]
     return ReportList(items=items, next_cursor=next_cursor)
 
 
 async def get_report(db: AsyncSession, user_id: str, report_id: str) -> ReportDetail:
     async with db.begin():
-        report, access = await load_visible_report(db, user_id, report_id)
+        report = await load_visible_report(db, user_id, report_id)
         job = await db.get(ValidationJob, report.latest_job_id) if report.latest_job_id else None
     return ReportDetail(
-        **_item(report, job, access),
+        **_item(report, job),
         target_url=report.target_url,
         description=report.description,
         expected_result=report.expected_result,
         test_data=report.test_data,
         has_screenshot=report.input_artifact_id is not None,
         input_artifact_id=report.input_artifact_id,
-        client_context=report.client_context if access == "org" else None,
+        client_context=report.client_context,
         scrubbed=report.scrubbed_at is not None,
     )

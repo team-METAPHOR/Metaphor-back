@@ -238,75 +238,30 @@ async def test_other_org_program_404(client, world):
     assert create_elsewhere.status_code == 404
 
 
-async def test_invite_only_hidden_from_uninvited_user(client, world, db_session):
+async def test_non_member_cannot_see_program(client, world, db_session):
     program = await created(client, world, status="active")
-    reporter, reporter_headers = await login_as(client, db_session)
+    _, stranger = await login_as(client, db_session)
+    url = f"/api/v1/programs/{program['id']}"
+    for headers in (stranger, world["out"]):
+        assert (await client.get("/api/v1/programs", headers=headers)).json()["items"] == []
+        assert (await client.get(url, headers=headers)).status_code == 404
 
-    listed = await client.get("/api/v1/programs", headers=reporter_headers)
-    assert listed.json()["items"] == []
-    get = await client.get(f"/api/v1/programs/{program['id']}", headers=reporter_headers)
-    assert get.status_code == 404
-
-    invite = await client.post(
-        f"/api/v1/programs/{program['id']}/invites",
-        json={"email": reporter.email},
-        headers=world["admin"],
-    )
-    assert invite.status_code == 201, invite.text
-
-    listed = await client.get("/api/v1/programs", headers=reporter_headers)
-    assert [p["id"] for p in listed.json()["items"]] == [program["id"]]
-    get = await client.get(f"/api/v1/programs/{program['id']}", headers=reporter_headers)
-    assert get.status_code == 200
-    assert set(get.json()) == {"id", "name", "status", "submission_mode", "base_url"}
-
-    removed = await client.delete(
-        f"/api/v1/programs/{program['id']}/invites/{reporter.id}", headers=world["admin"]
-    )
-    assert removed.status_code == 204
-    listed = await client.get("/api/v1/programs", headers=reporter_headers)
-    assert listed.json()["items"] == []
-
-
-async def test_open_program_visible_to_any_user_as_public_subset(client, world, db_session):
-    open_program = await created(
-        client, world, status="active", submission_mode="open_authenticated"
-    )
-    await created(client, world, name="Draft", submission_mode="open_authenticated")  # not active
-    _, reporter_headers = await login_as(client, db_session)
-    listed = await client.get("/api/v1/programs", headers=reporter_headers)
-    assert listed.status_code == 200
-    items = listed.json()["items"]
-    assert [p["id"] for p in items] == [open_program["id"]]
-    assert items[0]["role"] is None
-    assert "has_session" not in listed.text and SECRET_REF not in listed.text
-
+    await created(client, world, name="Draft")
     member_list = await client.get("/api/v1/programs", headers=world["dev"])
-    assert {p["role"] for p in member_list.json()["items"]} == {"developer"}
-    assert len(member_list.json()["items"]) == 2
-
-
-async def test_invite_requires_admin_and_known_user(client, world):
-    program = await created(client, world)
-    url = f"/api/v1/programs/{program['id']}/invites"
-    assert (
-        await client.post(url, json={"email": "x@example.com"}, headers=world["dev"])
-    ).status_code == 403
-    missing = await client.post(url, json={"email": "nobody@example.com"}, headers=world["admin"])
-    assert missing.status_code == 404
-    assert missing.json()["error"]["code"] == "USER_NOT_FOUND"
+    items = member_list.json()["items"]
+    assert {p["role"] for p in items} == {"developer"} and len(items) == 2
+    assert set(items[0]) == {"id", "name", "status", "base_url", "role"}
 
 
 async def test_secret_ref_never_in_any_response(client, world, db_session):
-    program = await created(client, world, status="active", submission_mode="open_authenticated")
+    program = await created(client, world, status="active")
     await bind_session(db_session, program["id"])
     url = f"/api/v1/programs/{program['id']}"
-    _, reporter_headers = await login_as(client, db_session)
     responses = [
         await client.get(url, headers=world["admin"]),
         await client.get("/api/v1/programs", headers=world["admin"]),
-        await client.get(url, headers=reporter_headers),
-        await client.get("/api/v1/programs", headers=reporter_headers),
+        await client.get(url, headers=world["dev"]),
+        await client.get("/api/v1/programs", headers=world["dev"]),
         await client.patch(url, json={"width": 1024}, headers=world["admin"]),
     ]
     for response in responses:

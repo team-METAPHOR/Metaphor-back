@@ -12,18 +12,17 @@ from tests.test_reports_api import submit
 async def world(client, db_session):
     org = await make_org(db_session)
     program = await make_program(db_session, org)
-    program.submission_mode = "open_authenticated"
     await db_session.commit()
     _, admin_h = await login_as(client, db_session, org, "admin")
     _, dev_h = await login_as(client, db_session, org, "developer")
-    _, reporter_h = await login_as(client, db_session)
-    body = (await submit(client, reporter_h, program.id, description="버그 설명")).json()
+    _, reviewer_h = await login_as(client, db_session, org, "reviewer")
+    body = (await submit(client, dev_h, program.id, description="버그 설명")).json()
     return {
         "report_id": body["id"],
         "job_id": body["validation_job_id"],
         "admin_h": admin_h,
         "dev_h": dev_h,
-        "reporter_h": reporter_h,
+        "reviewer_h": reviewer_h,
     }
 
 
@@ -34,7 +33,7 @@ async def set_status(db_session, job_id, status):
 
 
 async def answer(client, world, headers=None, source=None, text="cat은 결과 있음", key=None):
-    headers = dict(headers or world["reporter_h"])
+    headers = dict(headers or world["reviewer_h"])
     if key:
         headers["Idempotency-Key"] = key
     return await client.post(
@@ -142,7 +141,7 @@ async def test_answers_share_job_request_hourly_limit_429(client, db_session, wo
 
     await set_status(db_session, world["job_id"], "needs_info")
     await seed_job_requests(
-        client, db_session, world["reporter_h"], JOB_REQUEST_HOURLY_LIMIT, "report.retest"
+        client, db_session, world["reviewer_h"], JOB_REQUEST_HOURLY_LIMIT, "report.retest"
     )
     response = await answer(client, world)
     assert response.status_code == 429

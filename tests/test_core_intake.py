@@ -173,7 +173,7 @@ async def test_create_report_with_masked_screenshot(db_session, world, storage):
     assert job.kind == "initial" and job.status == "queued"
     assert report.latest_job_id == job.id
     artifact = await db_session.get(Artifact, report.input_artifact_id)
-    assert artifact.kind == "input_image" and artifact.visibility == "reporter"
+    assert artifact.kind == "input_image"
     assert artifact.sha256 == shot.sha256
     path = storage / artifact.storage_key
     assert path.read_bytes() == shot.data
@@ -195,7 +195,7 @@ async def test_create_report_redacts_text(db_session, world):
         assert secret not in report.description
 
 
-async def test_create_report_widget_gets_receipt_and_org_visibility(db_session, world):
+async def test_create_report_widget_gets_receipt(db_session, world):
     _, _, program = world
     sub = submission(program, screenshot=prepare_screenshot(png(), None), origin_kind="mapped")
     async with db_session.begin():
@@ -203,8 +203,7 @@ async def test_create_report_widget_gets_receipt_and_org_visibility(db_session, 
     assert report.author_id is None
     assert report.public_receipt_id.startswith("rcpt_")
     assert report.origin_kind == "mapped"
-    artifact = await db_session.get(Artifact, report.input_artifact_id)
-    assert artifact.visibility == "org"
+    assert report.input_artifact_id is not None
 
 
 @pytest.mark.parametrize(

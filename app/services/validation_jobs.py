@@ -1,10 +1,10 @@
-"""Read side of validation jobs (status, result, events) with report-level visibility."""
+"""Read side of validation jobs (status, result, events); org members of the report only."""
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.models import Clarification, ValidationJob
+from app.models import ValidationJob
 from app.models.validation_job import ACTIVE_JOB_STATUSES
 from app.repositories import validation_jobs as jobs_repo
 from app.schemas.validation_job import EventList, EventOut, JobOut, JobResult
@@ -12,46 +12,25 @@ from app.services.access import org_role
 from app.services.audit import record_audit
 from app.services.reports import load_visible_report
 
-# Reporters see progress and follow-up questions only; verdicts, AI classification and error
-# codes are customer information (spec §4: reporter sees only what the customer publishes).
-_ORG_ONLY_FIELDS = (
-    "verdict",
-    "reason_code",
-    "classification",
-    "error_code",
-    "backend_error_code",
-    "regression",
-)
-
-
-def job_out(job: ValidationJob, access: str = "org") -> JobOut:
-    out = JobOut.model_validate(job, from_attributes=True)
-    if access != "org":
-        out = out.model_copy(update={field: None for field in _ORG_ONLY_FIELDS})
-        out.analysis_available = False
-    return out
-
 
 async def load_visible_job(db: AsyncSession, user_id: str, job_id: str):
     job = await jobs_repo.get(db, job_id)
     if job is None:
         raise ApiError(404, "NOT_FOUND", "검증 작업을 찾을 수 없습니다.")
-    report, access = await load_visible_report(db, user_id, job.report_id)
-    return job, report, access
+    report = await load_visible_report(db, user_id, job.report_id)
+    return job, report
 
 
 async def get_job(db: AsyncSession, user_id: str, job_id: str) -> JobOut:
     async with db.begin():
-        job, _, access = await load_visible_job(db, user_id, job_id)
-        return job_out(job, access)
+        job, _ = await load_visible_job(db, user_id, job_id)
+        return JobOut.model_validate(job, from_attributes=True)
 
 
 async def get_result(db: AsyncSession, user_id: str, job_id: str) -> JobResult:
-    """Engine result and evidence metadata: customer org members only."""
+    """Engine result and evidence metadata."""
     async with db.begin():
-        job, report, access = await load_visible_job(db, user_id, job_id)
-        if access != "org":
-            raise ApiError(403, "FORBIDDEN", "검증 결과는 고객사 구성원만 볼 수 있습니다.")
+        job, report = await load_visible_job(db, user_id, job_id)
         result = await jobs_repo.get_result(db, job.id)
         if (
             result is None
@@ -68,41 +47,20 @@ async def list_events(
     db: AsyncSession, user_id: str, job_id: str, *, after: int, limit: int
 ) -> EventList:
     async with db.begin():
-        job, _, access = await load_visible_job(db, user_id, job_id)
+        job, _ = await load_visible_job(db, user_id, job_id)
         events = await jobs_repo.events_after(db, job.id, after, limit)
-        items = [EventOut.model_validate(e, from_attributes=True) for e in events]
-        if access != "org":
-            # Stage names only; details (plan hashes, revisions, error codes) stay with the org.
-            items = [item.model_copy(update={"detail": {}}) for item in items]
-        return EventList(items=items)
+        return EventList(items=[EventOut.model_validate(e, from_attributes=True) for e in events])
 
 
 CANCEL_ROLES = ("reviewer", "admin")
-
-
-async def _reporter_started(db: AsyncSession, user_id: str, job: ValidationJob) -> bool:
-    """A reporter may stop only jobs they caused: the initial job of their own report (access is
-    already 'author') or a resume created from *their* answer — not one an org member started."""
-    if job.kind == "initial":
-        return True
-    if job.kind == "resume":
-        author = await db.scalar(
-            select(Clarification.author_id).where(Clarification.created_job_id == job.id)
-        )
-        return author == user_id
-    return False
 
 
 async def cancel_job(db: AsyncSession, user_id: str, job_id: str) -> dict:
     """queued → cancelled at once; running → cancelling (the worker confirms the stop).
     Conditional updates make cancel-vs-finish races resolve to exactly one terminal state."""
     async with db.begin():
-        job, report, access = await load_visible_job(db, user_id, job_id)
-        if access == "org":
-            allowed = await org_role(db, user_id, report.org_id) in CANCEL_ROLES
-        else:
-            allowed = await _reporter_started(db, user_id, job)
-        if not allowed:
+        job, report = await load_visible_job(db, user_id, job_id)
+        if await org_role(db, user_id, report.org_id) not in CANCEL_ROLES:
             raise ApiError(403, "FORBIDDEN", "작업을 취소할 권한이 없습니다.")
 
         now = func.now()

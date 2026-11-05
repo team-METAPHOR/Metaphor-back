@@ -7,7 +7,6 @@ from app.models.base import Base
 from app.models.columns import created_at, fk, id_pk, one_of, updated_at
 
 PROGRAM_STATUSES = ("draft", "active", "paused", "closed")
-SUBMISSION_MODES = ("open_authenticated", "invite_only")
 
 
 def text_array() -> Mapped[list[str]]:
@@ -20,7 +19,6 @@ class Program(Base):
     __tablename__ = "programs"
     __table_args__ = (
         one_of("status", PROGRAM_STATUSES, "status"),
-        one_of("submission_mode", SUBMISSION_MODES, "submission_mode"),
         CheckConstraint("auto_fresh_retries BETWEEN 0 AND 2", name="auto_fresh_retries"),
     )
 
@@ -28,7 +26,6 @@ class Program(Base):
     owner_org_id: Mapped[str] = fk("organizations.id")
     name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(20), server_default="draft")
-    submission_mode: Mapped[str] = mapped_column(String(30), server_default="invite_only")
     current_revision: Mapped[int] = mapped_column(Integer, server_default="1")
     external_ai_allowed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     daily_job_limit: Mapped[int] = mapped_column(Integer, server_default="50")
@@ -62,12 +59,4 @@ class ProgramScopeRevision(Base):
     allow_private_targets: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     private_cidrs: Mapped[list[str]] = text_array()
     created_by: Mapped[str | None] = fk("users.id", nullable=True, index=False)
-    created_at: Mapped[datetime] = created_at()
-
-
-class ProgramInvite(Base):
-    __tablename__ = "program_invites"
-
-    program_id: Mapped[str] = fk("programs.id", ondelete="CASCADE", primary_key=True)
-    user_id: Mapped[str] = fk("users.id", ondelete="CASCADE", primary_key=True)
     created_at: Mapped[datetime] = created_at()

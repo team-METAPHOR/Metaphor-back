@@ -36,11 +36,9 @@ ANALYSIS = {
 async def world(client, db_session):
     org = await make_org(db_session)
     program = await make_program(db_session, org)
-    program.submission_mode = "open_authenticated"
     await db_session.commit()
     _, admin = await login_as(client, db_session, org, "admin")
     _, dev = await login_as(client, db_session, org, "developer")
-    reporter, reporter_h = await login_as(client, db_session)
     _, stranger = await login_as(client, db_session)
     other_org = await make_org(db_session, name="B")
     _, other_admin = await login_as(client, db_session, other_org, "admin")
@@ -52,7 +50,7 @@ async def world(client, db_session):
             "description": "검색 결과가 이상해요",
         },
         files={"screenshot": ("s.png", png(), "image/png")},
-        headers=reporter_h,
+        headers=dev,
     )
     assert response.status_code == 201, response.text
     body = response.json()
@@ -63,7 +61,6 @@ async def world(client, db_session):
         "job_id": body["validation_job_id"],
         "admin": admin,
         "dev": dev,
-        "reporter": reporter_h,
         "stranger": stranger,
         "other_admin": other_admin,
     }
@@ -84,7 +81,6 @@ async def write_artifact(db_session, world, name: str, data: bytes, kind: str, *
             storage_key=storage.relative_key(path),
             sha256=hashlib.sha256(data).hexdigest(),
             size=len(data),
-            visibility="org",
             expires_at=extra.pop("expires_at", datetime.now(UTC) + timedelta(days=30)),
             **extra,
         )
@@ -191,10 +187,8 @@ async def test_handoff_expired_after_scrub(client, db_session, world):
     assert body["summary"] is None and body["solutions"] == []
 
 
-async def test_handoff_reporter_403_stranger_404(client, db_session, world):
+async def test_handoff_stranger_404(client, db_session, world):
     await finish(db_session, world)
-    reporter = await client.get(handoff_url(world), headers=world["reporter"])
-    assert reporter.status_code == 403
     assert (await client.get(handoff_url(world), headers=world["stranger"])).status_code == 404
     assert (await client.get(handoff_url(world), headers=world["other_admin"])).status_code == 404
     assert (await client.get(handoff_url(world))).status_code == 401
@@ -219,7 +213,6 @@ async def test_job_artifacts_listed_for_org_only(client, db_session, world):
     assert set(item) == {"id", "kind", "size", "created_at"}
     assert (item["id"], item["kind"]) == (shot, "screenshot")
     assert "storage" not in response.text
-    assert (await client.get(url, headers=world["reporter"])).status_code == 403
     assert (await client.get(url, headers=world["stranger"])).status_code == 404
 
 
@@ -248,7 +241,7 @@ async def test_content_type_fixed_by_kind_not_file_name(client, db_session, worl
 
 async def test_download_other_org_404(client, db_session, world):
     artifact_id = await write_artifact(db_session, world, "result.json", b"{}", "json")
-    for who in ("other_admin", "stranger", "reporter"):
+    for who in ("other_admin", "stranger"):
         assert (await client.get(download_url(artifact_id), headers=world[who])).status_code == 404
     assert (await client.get(download_url("0" * 32), headers=world["dev"])).status_code == 404
 
@@ -258,20 +251,13 @@ async def test_anonymous_evidence_401(client, db_session, world):
     assert (await client.get(download_url(artifact_id))).status_code == 401
 
 
-async def test_reporter_can_download_own_input_only(client, db_session, world):
+async def test_input_image_download_org_only(client, db_session, world):
     input_id = world["report"].input_artifact_id
-    own = await client.get(download_url(input_id), headers=world["reporter"])
+    own = await client.get(download_url(input_id), headers=world["dev"])
     assert own.status_code == 200
     assert own.headers["content-type"] == "image/png"
     assert own.content.startswith(b"\x89PNG")
     assert (await client.get(download_url(input_id), headers=world["stranger"])).status_code == 404
-    assert (await client.get(download_url(input_id), headers=world["dev"])).status_code == 200
-    # Org-visibility input images (widget reports) are not the reporter's to fetch.
-    await db_session.execute(
-        update(Artifact).where(Artifact.id == input_id).values(visibility="org")
-    )
-    await db_session.commit()
-    assert (await client.get(download_url(input_id), headers=world["reporter"])).status_code == 404
 
 
 async def test_expired_artifact_404(client, db_session, world):
@@ -313,7 +299,6 @@ async def test_storage_key_traversal_rejected(client, db_session, world, tmp_pat
             storage_key=key,
             sha256="0" * 64,
             size=2,
-            visibility="org",
             expires_at=datetime.now(UTC) + timedelta(days=1),
         )
     )

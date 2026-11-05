@@ -35,11 +35,11 @@ async def list_visible(
     source: str | None,
     program_id: str | None,
 ) -> list[tuple[Report, ValidationJob | None]]:
-    """Reports of the user's orgs plus the user's own reports, newest first."""
+    """Reports of the user's active orgs, newest first."""
     query = (
         select(Report, ValidationJob)
         .outerjoin(ValidationJob, ValidationJob.id == Report.latest_job_id)
-        .where(or_(Report.org_id.in_(member_org_ids(user_id)), Report.author_id == user_id))
+        .where(Report.org_id.in_(member_org_ids(user_id)))
         .order_by(Report.created_at.desc(), Report.id.desc())
         .limit(limit + 1)
     )

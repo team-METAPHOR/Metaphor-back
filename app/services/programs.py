@@ -7,9 +7,8 @@ from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.models import Program, ProgramScopeRevision
 from app.repositories import programs as repo
-from app.repositories import users as users_repo
 from app.schemas.program import SCOPE_FIELDS, ProgramCreate, ProgramPatch
-from app.services.access import can_submit, org_role, require_org_role
+from app.services.access import org_role, require_org_role
 from app.services.audit import record_audit
 from app.services.intake import run_policy
 
@@ -19,7 +18,6 @@ _APP_VERSION = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 _PROGRAM_FIELDS = (
     "name",
     "status",
-    "submission_mode",
     "external_ai_allowed",
     "auto_fresh_retries",
 )
@@ -107,15 +105,12 @@ async def create_program(db: AsyncSession, user_id: str, body: ProgramCreate):
 
 
 async def get_program(db: AsyncSession, user_id: str, program_id: str):
-    """Return (program, revision, role). role None = reporter (public subset only)."""
+    """Return (program, revision) for members of the owning org; 404 for everyone else."""
     async with db.begin():
         program = await repo.get(db, program_id)
-        if program is None:
+        if program is None or await org_role(db, user_id, program.owner_org_id) is None:
             raise _not_found()
-        role = await org_role(db, user_id, program.owner_org_id)
-        if role is None and not await can_submit(db, user_id, program):
-            raise _not_found()
-        return program, await repo.get_revision(db, program), role
+        return program, await repo.get_revision(db, program)
 
 
 async def list_programs(db: AsyncSession, user_id: str):
@@ -189,43 +184,3 @@ async def update_program(db: AsyncSession, user_id: str, program_id: str, body: 
             await db.refresh(program)
         await db.refresh(revision)
     return program, revision
-
-
-async def _admin_program(db: AsyncSession, user_id: str, program_id: str) -> Program:
-    program = await repo.get(db, program_id)
-    if program is None:
-        raise _not_found()
-    await require_org_role(db, user_id, program.owner_org_id, "admin")
-    return program
-
-
-async def invite(db: AsyncSession, user_id: str, program_id: str, email: str) -> str:
-    async with db.begin():
-        program = await _admin_program(db, user_id, program_id)
-        invitee = await users_repo.get_by_email(db, email.strip().lower())
-        if invitee is None or not invitee.is_active:
-            raise ApiError(404, "USER_NOT_FOUND", "User not found")
-        await repo.add_invite(db, program.id, invitee.id)
-        await record_audit(
-            db,
-            actor_id=user_id,
-            org_id=program.owner_org_id,
-            action="program.invite",
-            target=program.id,
-            detail={"user_id": invitee.id},
-        )
-        return invitee.id
-
-
-async def uninvite(db: AsyncSession, user_id: str, program_id: str, invitee_id: str) -> None:
-    async with db.begin():
-        program = await _admin_program(db, user_id, program_id)
-        await repo.delete_invite(db, program.id, invitee_id)
-        await record_audit(
-            db,
-            actor_id=user_id,
-            org_id=program.owner_org_id,
-            action="program.uninvite",
-            target=program.id,
-            detail={"user_id": invitee_id},
-        )

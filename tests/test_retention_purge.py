@@ -60,7 +60,6 @@ async def add_artifact(db_session, report, path, *, expires_in: timedelta, key=N
             storage_key=key or storage.relative_key(path),
             sha256=hashlib.sha256(b"x").hexdigest(),
             size=1,
-            visibility="org",
             expires_at=datetime.now(UTC) + expires_in,
         )
     )

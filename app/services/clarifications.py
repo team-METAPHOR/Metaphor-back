@@ -36,8 +36,8 @@ async def answer_question(
     request_hash = hashlib.sha256(f"{source_job_id}\0{answers}".encode()).hexdigest()
 
     async with db.begin():
-        report, access = await load_visible_report(db, user_id, report_id)
-        if access == "org" and await org_role(db, user_id, report.org_id) not in ANSWER_ROLES:
+        report = await load_visible_report(db, user_id, report_id)
+        if await org_role(db, user_id, report.org_id) not in ANSWER_ROLES:
             raise ApiError(403, "FORBIDDEN", "추가 답변 권한이 없습니다.")
 
         async def create() -> tuple[int, dict]:

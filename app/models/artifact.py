@@ -7,17 +7,13 @@ from app.models.base import Base
 from app.models.columns import created_at, fk, id_pk, one_of
 
 ARTIFACT_KINDS = ("input_image", "report_md", "screenshot", "json")
-VISIBILITIES = ("reporter", "org")
 
 
 class Artifact(Base):
     """Private stored file. Downloads go through this row, never through raw paths."""
 
     __tablename__ = "artifacts"
-    __table_args__ = (
-        one_of("kind", ARTIFACT_KINDS, "kind"),
-        one_of("visibility", VISIBILITIES, "visibility"),
-    )
+    __table_args__ = (one_of("kind", ARTIFACT_KINDS, "kind"),)
 
     id: Mapped[str] = id_pk()
     org_id: Mapped[str] = fk("organizations.id")
@@ -28,6 +24,5 @@ class Artifact(Base):
     storage_key: Mapped[str] = mapped_column(String(512))
     sha256: Mapped[str] = mapped_column(String(64))
     size: Mapped[int] = mapped_column(BigInteger)
-    visibility: Mapped[str] = mapped_column(String(20))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = created_at()

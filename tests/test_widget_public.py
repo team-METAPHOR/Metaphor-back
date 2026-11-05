@@ -223,7 +223,7 @@ async def test_live_screenshot_enabled_201(client, db_session, world):
     assert response.status_code == 201, response.text
     [report] = await reports(db_session)
     artifact = await db_session.get(Artifact, report.input_artifact_id)
-    assert artifact.visibility == "org"
+    assert artifact.kind == "input_image"
 
 
 async def test_page_url_origin_differs_from_request_origin_422(client, world):
@@ -335,7 +335,7 @@ async def test_anonymous_cannot_read_job_result_evidence(client, db_session, wor
     for path in paths:
         assert (await client.get(path, headers={"Origin": STAGING})).status_code == 401
         assert (await client.get(path, headers=stranger)).status_code == 404
-    # A logged-in reporter's own report list never includes anonymous widget reports.
+    # A logged-in non-member's report list never includes the org's widget reports.
     assert (await client.get("/api/v1/reports", headers=stranger)).json()["items"] == []
 
 
@@ -441,7 +441,7 @@ async def test_widget_respects_daily_job_limit_429(client, db_session, world):
         update(Program).where(Program.id == world["program"].id).values(daily_job_limit=4)
     )
     await db_session.commit()
-    _, reporter_h = await login_as(client, db_session, world["org"], "developer")
+    _, dev_h = await login_as(client, db_session, world["org"], "developer")
     for i in range(3):
         response = await client.post(
             "/api/v1/reports",
@@ -450,7 +450,7 @@ async def test_widget_respects_daily_job_limit_429(client, db_session, world):
                 "target_url": f"{STAGING}/search?q={i}",
                 "description": "bug",
             },
-            headers=reporter_h,
+            headers=dev_h,
         )
         assert response.status_code == 201, response.text
     assert (await post(client, world["key"], payload())).status_code == 201
@@ -470,7 +470,7 @@ async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session,
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "WIDGET_DAILY_LIMITED"
     # The customer's own platform reruns still have budget left.
-    _, reporter_h = await login_as(client, db_session, world["org"], "developer")
+    _, dev_h = await login_as(client, db_session, world["org"], "developer")
     platform = await client.post(
         "/api/v1/reports",
         data={
@@ -478,7 +478,7 @@ async def test_widget_daily_cap_keeps_half_of_job_budget_429(client, db_session,
             "target_url": f"{STAGING}/search?q=x",
             "description": "b",
         },
-        headers=reporter_h,
+        headers=dev_h,
     )
     assert platform.status_code == 201, platform.text
 

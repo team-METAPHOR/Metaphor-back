@@ -24,16 +24,3 @@ async def deactivate_membership(db: AsyncSession, org_id: str, user_id: str) -> 
     """Deactivate a membership and revoke the user's sessions. Runs in the caller's transaction."""
     await repo.deactivate_membership(db, org_id, user_id)
     await revoke_user_sessions(db, user_id)
-
-
-async def can_submit(db: AsyncSession, user_id: str, program) -> bool:
-    """Active program and (open to logged-in users, or invited, or an org member)."""
-    from app.repositories import programs as programs_repo
-
-    if program.status != "active":
-        return False
-    if program.submission_mode == "open_authenticated":
-        return True
-    if await programs_repo.is_invited(db, program.id, user_id):
-        return True
-    return await org_role(db, user_id, program.owner_org_id) is not None

@@ -1,4 +1,4 @@
-"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at 4a710f0."""
+"""Offline engine doubles. Shapes follow core_engine tests/qa_fixtures.py at e396348."""
 
 import copy
 import json

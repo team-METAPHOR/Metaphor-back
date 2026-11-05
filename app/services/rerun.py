@@ -1,12 +1,16 @@
-"""Customer-requested re-runs: `fresh` (new analysis) and `retest` (same stored plan)."""
+"""Re-runs: customer-requested `fresh` (new analysis) and `retest` (same stored plan), plus the
+automatic `fresh` that regenerates the scenario after an inconclusive result."""
 
 import hashlib
 import json
+from urllib.parse import urlsplit
 
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
-from app.models import Program, ProgramScopeRevision, QaResult, ValidationJob
+from app.core.text import redact
+from app.models import AuditEvent, Program, ProgramScopeRevision, QaResult, Report, ValidationJob
 from app.schemas.report import JobRequest
 from app.services.access import org_role
 from app.services.audit import record_audit
@@ -97,3 +101,103 @@ async def request_job(
             request_hash=request_hash,
             fn=create,
         )
+
+
+AUTO_FRESH_ACTION = "job.auto_fresh"
+# Sources an automatic fresh may follow. A customer-requested fresh is never auto-retried.
+AUTO_FRESH_SOURCE_KINDS = ("initial", "resume")
+# create_job refusals that mean "not now": active job, scrubbed report, daily limit.
+AUTO_FRESH_SKIP_STATUSES = (409, 410, 429)
+NOTE_HEADER = "[이전 재현 시도] 아래 계획은 결론을 내지 못했습니다. 다른 해석·경로로 시도하세요."
+NOTE_MAX_STEPS = 20
+NOTE_MAX_TARGET = 200
+
+
+def _step_target(step: dict) -> str:
+    target = str(step.get("target") or "")
+    if step.get("action") == "navigate":
+        # Path only: the origin is fixed by the scope, and the query may carry user data.
+        target = urlsplit(target).path or "/"
+    return " ".join(target.split())[:NOTE_MAX_TARGET]
+
+
+def previous_attempt_note(raw: dict) -> str:
+    """Summarize the plan that ended inconclusive (steps, failed step, blocker) for a fresh run.
+
+    The text is appended to the engine description of the regenerated scenario."""
+    report = raw.get("report") or {}
+    steps = list(((report.get("scenario") or {}).get("steps")) or [])
+    evidence = list(((report.get("run") or {}).get("evidence")) or [])
+    failed = next(
+        (ev for ev in evidence if ev.get("blocker") and ev.get("completed_steps", 0) < len(steps)),
+        None,
+    )
+    lines = [NOTE_HEADER]
+    for index, step in enumerate(steps[:NOTE_MAX_STEPS]):
+        line = f"{index + 1}. {step.get('action', '')} {_step_target(step)}".rstrip()
+        if failed is not None and failed["completed_steps"] == index:
+            line += f"  ← 실패: {failed['blocker']}"
+        lines.append(line)
+    if failed is None or failed["completed_steps"] >= NOTE_MAX_STEPS:
+        code = next((ev["blocker"] for ev in evidence if ev.get("blocker")), None)
+        code = code or raw.get("error_code")
+        if code:
+            lines.append(f"결론 없음 사유: {code}")
+    return redact("\n".join(lines))
+
+
+def _auto_fresh_of(job_id: str):
+    return exists().where(AuditEvent.action == AUTO_FRESH_ACTION, AuditEvent.target == job_id)
+
+
+async def auto_fresh(session: AsyncSession, job_id: str) -> str | None:
+    """Queue one automatic `fresh` job after `job_id` ended inconclusive; return its id.
+
+    Returns None (nothing created) unless the job is inconclusive, is an initial/resume job or
+    itself an automatic fresh, is still the report's latest job, and the report has fewer
+    automatic fresh jobs than `program.auto_fresh_retries`. Limits enforced by `create_job`
+    (409 active job, 410 scrubbed report, 429 daily limit) also skip silently.
+    Automatic jobs are counted by their `job.auto_fresh` audit rows (target = new job id).
+    """
+    try:
+        async with session.begin():
+            job = await session.get(ValidationJob, job_id)
+            if job is None or job.status != "inconclusive":
+                return None
+            report = await session.get(Report, job.report_id)
+            program = await session.get(Program, report.program_id)
+            if report.latest_job_id != job.id:
+                return None
+            if program.status != "active" or not program.external_ai_allowed:
+                return None
+            if job.kind not in AUTO_FRESH_SOURCE_KINDS and not await session.scalar(
+                select(_auto_fresh_of(job.id))
+            ):
+                return None
+            used = await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .join(ValidationJob, ValidationJob.id == AuditEvent.target)
+                .where(
+                    AuditEvent.action == AUTO_FRESH_ACTION,
+                    ValidationJob.report_id == report.id,
+                )
+            )
+            if used >= program.auto_fresh_retries:
+                return None
+            result = await session.get(QaResult, job.id)
+            note = previous_attempt_note(result.raw if result else {})
+            fresh = await create_job(session, report, "fresh", parent=job, answers=note)
+            await record_audit(
+                session,
+                actor_id=None,
+                org_id=report.org_id,
+                action=AUTO_FRESH_ACTION,
+                target=fresh.id,
+                detail={"report_id": report.id, "source_job_id": job.id},
+            )
+            return fresh.id
+    except ApiError as error:
+        if error.status in AUTO_FRESH_SKIP_STATUSES:
+            return None
+        raise

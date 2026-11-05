@@ -324,3 +324,21 @@ async def test_unknown_reset_adapter_422(client, world):
         f"/api/v1/programs/{program['id']}", json={"reset_adapter": "nope"}, headers=world["admin"]
     )
     assert patch.json()["error"]["code"] == "RESET_ADAPTER_UNKNOWN"
+
+
+async def test_auto_fresh_retries_default_set_and_bounded(client, world, db_session):
+    program = await created(client, world)
+    assert program["auto_fresh_retries"] == 1
+    assert (await created(client, world, auto_fresh_retries=0))["auto_fresh_retries"] == 0
+    for bad in (-1, 3):
+        assert (await create(client, world, auto_fresh_retries=bad)).status_code == 422
+    url = f"/api/v1/programs/{program['id']}"
+    response = await client.patch(url, json={"auto_fresh_retries": 2}, headers=world["admin"])
+    assert response.status_code == 200, response.text
+    assert response.json()["auto_fresh_retries"] == 2
+    assert response.json()["current_revision"] == 1
+    row = await db_session.get(Program, program["id"], populate_existing=True)
+    assert row.auto_fresh_retries == 2
+    for bad in (3, None):
+        response = await client.patch(url, json={"auto_fresh_retries": bad}, headers=world["admin"])
+        assert response.status_code == 422

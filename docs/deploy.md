@@ -4,6 +4,19 @@ API와 워커는 `/home/ubuntu/metaphor-back`에서 같은 PostgreSQL과 `STORAG
 사용한다. API는 신고를 저장하고, 워커는 DB 큐의 작업을 가져와 엔진을 실행한다.
 엔진·프롬프트·대상 주소 보호 정책은 이 배포 작업에서 변경하지 않는다.
 
+팀 EC2 데모는 Caddy와 IP 기반 임시 DNS 주소로 HTTPS를 사용한다.
+
+| 용도 | 주소 |
+|---|---|
+| 대시보드 | `https://metaphor-front.vercel.app` |
+| API / SDK | `https://api.13-197-7-82.sslip.io` |
+| 신고용 BugLab production | `https://shop.13-197-7-82.sslip.io` |
+| 엔진 재현 대상 BugLab dev | `https://dev.13-197-7-82.sslip.io` |
+
+공인 IP의 HTTP origin은 위젯 설정에서 `INVALID_ORIGIN`으로 거부된다
+(`normalize_origin`: HTTPS 또는 HTTP localhost만 허용). 따라서 HTTP `:3200` 주소를
+그대로 허용 origin에 넣는 절차는 현재 코드에서 동작하지 않는다. 보호 정책은 유지한다.
+
 ## 1. 환경변수
 
 API 공통 설정은 `/home/ubuntu/metaphor-back/.env`, 워커 전용 설정은
@@ -18,7 +31,7 @@ API 설정을 셸에서 `source`하지 않는다(`APP_NAME`의 공백과 JSON �
 | `ALLOWED_ORIGINS` | JSON 배열. `https://metaphor-front.vercel.app`, 필요 시 로컬 프론트 주소 추가 |
 | `IP_HASH_SECRET` | UTF-8 기준 32바이트 이상의 무작위 비밀 값. 운영에서는 누락 시 시작 실패. 기존 값을 유지 |
 | `TRUSTED_PROXIES` | 직접 접속이면 `[]`. 직접 운영하는 프록시의 IP/CIDR만 등록 |
-| `PUBLIC_API_BASE` | 설치 코드에 사용할 외부 API 주소. 데모: `http://13.197.7.82:8000` |
+| `PUBLIC_API_BASE` | 설치 코드에 사용할 외부 API 주소. 데모: `https://api.13-197-7-82.sslip.io` |
 | `TEST_ACCOUNT_PUBLIC_KEY` | 선택. 테스트 계정 암호화용 RSA 공개키 PEM |
 
 | 워커 `.env.worker` | 설명 |
@@ -108,31 +121,55 @@ API 재시작을 수행한다. 워커 unit이 등록된 서버에서는 워커�
 
 ## 5. Vercel과 BugLab Shop 연결
 
+먼저 공개 DNS가 서버 IP를 가리키는지 확인하고 Caddy를 준비한다.
+
+```bash
+sudo apt-get install -y caddy
+sudo caddy validate --config deploy/Caddyfile.demo --adapter caddyfile
+# 기존 /etc/caddy/Caddyfile은 먼저 백업한다.
+sudo cp deploy/Caddyfile.demo /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+80/443이 열려 있어야 한다. 기존 다른 사이트의 프록시 설정이 있으면 덮어쓰지 말고 합친다.
+Caddy는 공개 인증서를 발급·갱신하고 세 사이트를 각각 localhost의 API 8000,
+production 3200, dev 3100에 연결한다. dev의 바인딩은 계속 localhost로 유지한다.
+일반 API의 `TRUSTED_PROXIES`에는 직접 운영하는 프록시 주소만 넣는다.
+팀 구성은 `["127.0.0.1","::1"]`이며 uvicorn도 기본적으로 loopback의 전달 헤더만 신뢰한다.
+접속 검증에서는 인증서 검증을 끄지 않는다.
+참고: [Caddy 자동 HTTPS](https://caddyserver.com/docs/automatic-https),
+[IP 기반 DNS 서비스](https://nip.io/).
+
 Vercel 프로젝트 환경변수는 `API_ORIGIN=http://13.197.7.82:8000`이며 변경하면 재배포한다.
+이 주소는 Vercel 서버가 사용하는 upstream이어서 현재 구성에서도 브라우저 혼합 콘텐츠를
+일으키지 않는다. HTTPS upstream으로 옮길 때는 `https://api.13-197-7-82.sslip.io`를 사용한다.
 대시보드는 `/api/*`를 프록시한다. API의 `ALLOWED_ORIGINS`에도 대시보드 origin을 등록한다.
 
 1. 대시보드에서 로그인하고 회사를 만든다. 기존 회사·프로그램을 사용한다면 중복 생성하지 않는다.
-2. 프로그램을 만들고 공개 테스트 주소를 `base_url`로 등록한다. HTTP 데모는 로그인 없는
-   재현으로 제한한다. 워커가 접근할 수 없는 localhost/사설 주소를 그대로 등록하지 않는다.
+2. 프로그램 `spear`를 만들고 `https://dev.13-197-7-82.sslip.io`를 `base_url`로 등록한다.
+   워커가 접근할 수 없는 localhost/사설 주소를 그대로 등록하지 않는다.
 3. `GET /api/v1/programs/{id}/origin-verification` 또는 화면에서 받은 토큰을 BugLab의
-   `server/.env.production`의 `METAPHOR_VERIFY_TOKEN`에 넣고 shop을 재시작한다.
+   `server/.env.dev`의 `METAPHOR_VERIFY_TOKEN`에 넣고 dev를 재시작한다.
+   production에서도 같은 경로를 확인하려면 `.env.production`에도 넣는다.
 4. `GET /.well-known/metaphor-verify.txt`가 200과 토큰 원문을 반환하는지 확인한 뒤
    대시보드에서 소유 확인(`POST .../origin-verification/check`)을 실행한다.
-5. 위젯 설정에서 shop origin을 허용하고 위젯·공개 신고를 켠다. 프로그램도 active,
+5. 위젯 설정에서 위 표의 shop·dev HTTPS origin을 허용하고 위젯·공개 신고를 켠다.
+   데모에서 production 스크린샷도 전송하려면 live screenshot을 켜고 신고 시 동의를 받는다.
+   프로그램도 active,
    외부 AI 처리 허용 상태여야 실제 작업이 만들어진다.
 6. 발급된 공개 프로젝트 키와 아래 값을 shop production 환경에 넣고 재시작한다.
 
 ```dotenv
-METAPHOR_SDK_URL=http://13.197.7.82:8000/sdk/v1/metaphor.js
-METAPHOR_API_URL=http://13.197.7.82:8000
+METAPHOR_SDK_URL=https://api.13-197-7-82.sslip.io/sdk/v1/metaphor.js
+METAPHOR_API_URL=https://api.13-197-7-82.sslip.io
 # METAPHOR_PROJECT_KEY와 METAPHOR_VERIFY_TOKEN은 해당 프로그램에서 받은 값 사용
 ```
 
 기존 shop이 있으면 DB를 보존한 채 빌드·재시작한다. 새 서버에서는 저장소 루트에서
-`npm run setup`, `npm run build`, `npm run start:prod`를 수행한다. 외부 접속에는
-`HOST=0.0.0.0`과 공개 포트가 필요하다. 서버의 기존 production은 3200, dev는
-localhost:3100으로 분리돼 있으므로 dev를 대상으로 쓰려면 별도의 공개 테스트 주소를
-준비하고 소유 확인해야 한다. 임의로 보호 정책을 해제하지 않는다.
+`npm run setup`, `npm run build`, `npm run start:prod`를 수행한다. 이번 HTTPS 구성은
+외부 요청을 Caddy가 받으므로 API·shop의 내부 포트를 추가로 공개할 필요가 없다.
+기존 production 3200과 localhost dev 3100은 유지하며 HTTPS 프록시로 분리한다.
+임의로 보호 정책을 해제하지 않는다.
 소유 확인 경로는 dev에서도 지원하지만 SDK는 production에서만 활성화한다.
 
 ## 6. 실제 검증
@@ -150,3 +187,6 @@ HTTP API/SDK는 HTTPS 고객 사이트에서 혼합 콘텐츠로 차단된다. �
 `scope.credentials_blocked_by_http=true`로 표시될 수 있다.
 
 설정 화면 설치 코드 개선, 신고자 마스킹 UI, SDK 통합 e2e는 별도 이슈 범위다.
+
+데모 계정의 로그인 정보는 서버 `/home/ubuntu/.config/metaphor/demo-access.json`과
+운영자 로컬 `.env.demo`(Git 제외, 권한 600)에 둔다. 비밀번호를 문서나 배포 로그에 넣지 않는다.

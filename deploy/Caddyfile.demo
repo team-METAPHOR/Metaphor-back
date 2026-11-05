@@ -1,0 +1,13 @@
+# Team EC2 demo only. Replace these hosts when moving to your own domain/server.
+# Ports 80/443 must reach this server for public certificate issuance.
+api.13-197-7-82.sslip.io {
+	reverse_proxy 127.0.0.1:8000
+}
+
+shop.13-197-7-82.sslip.io {
+	reverse_proxy 127.0.0.1:3200
+}
+
+dev.13-197-7-82.sslip.io {
+	reverse_proxy 127.0.0.1:3100
+}
